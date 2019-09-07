@@ -56,4 +56,53 @@ runner.suite("BigInt Arithmetic and Logic") {
     }
 }
 
+runner.suite("Rational Exact Fractions") {
+    runner.test("Canonical simplification and reduction") {
+        let r1 = Rational(BigInt(14), BigInt(21))
+        runner.expectEqual(r1.numerator, BigInt(2))
+        runner.expectEqual(r1.denominator, BigInt(3))
+        runner.expectEqual(r1.description, "2/3")
+
+        let r2 = Rational(BigInt(-10), BigInt(-25))
+        runner.expectEqual(r2.numerator, BigInt(2))
+        runner.expectEqual(r2.denominator, BigInt(5))
+    }
+
+    runner.test("Arithmetic operations") {
+        let a = Rational(1, 3)
+        let b = Rational(1, 6)
+        runner.expectEqual(a + b, Rational(1, 2))
+        runner.expectEqual(a - b, Rational(1, 6))
+        runner.expectEqual(a * b, Rational(1, 18))
+        runner.expectEqual(a / b, Rational(2, 1))
+    }
+
+    runner.test("Exact comparisons") {
+        let a = Rational(1, 3)
+        let b = Rational(1, 2)
+        let c = Rational(2, 6)
+        runner.expectTrue(a < b)
+        runner.expectTrue(b > a)
+        runner.expectEqual(a, c)
+    }
+
+    runner.test("Floor and Ceil rounding") {
+        let pos = Rational(7, 3) // 2.333...
+        runner.expectEqual(pos.floor, BigInt(2))
+        runner.expectEqual(pos.ceil, BigInt(3))
+
+        let neg = Rational(-7, 3) // -2.333...
+        runner.expectEqual(neg.floor, BigInt(-3))
+        runner.expectEqual(neg.ceil, BigInt(-2))
+    }
+
+    runner.test("Decimal and string conversions") {
+        let r1 = Rational("0.75")!
+        runner.expectEqual(r1, Rational(3, 4))
+
+        let r2 = Rational("-125/250")!
+        runner.expectEqual(r2, Rational(-1, 2))
+    }
+}
+
 runner.reportAndExit()
