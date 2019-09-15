@@ -158,14 +158,58 @@ runner.suite("BitVector QF_BV Bitwise & Modular Arithmetic") {
     }
 
     runner.test("Signed vs unsigned comparisons") {
-        // -1 as 8-bit is 0xFF = 255
         let minusOne = BitVector(width: 8, value: 0xFF)
         let plusOne = BitVector(width: 8, value: 1)
 
-        // Unsigned: 1 < 255
         runner.expectTrue(plusOne.unsignedLessThan(minusOne))
-        // Signed: -1 < 1
         runner.expectTrue(minusOne.signedLessThan(plusOne))
+    }
+}
+
+runner.suite("Symbol Interning and Scoped Tables") {
+    runner.test("Global symbol pool uniqueness and O(1) equality") {
+        let s1 = Symbol("x")
+        let s2 = Symbol("x")
+        let s3 = Symbol("y")
+
+        runner.expectEqual(s1, s2)
+        runner.expectEqual(s1.id, s2.id)
+        runner.expectNotEqual(s1, s3)
+        runner.expectEqual(s1.name, "x")
+        runner.expectEqual(s3.name, "y")
+    }
+
+    runner.test("Scoped SymbolTable push/pop and shadowing") {
+        let table = SymbolTable<Int>()
+        let symX = Symbol("x")
+        let symY = Symbol("y")
+
+        table.insert(symbol: symX, value: 10)
+        table.insert(symbol: symY, value: 20)
+        runner.expectEqual(table.lookup(symbol: symX), 10)
+
+        // Push inner scope
+        table.pushScope()
+        table.insert(symbol: symX, value: 99) // shadowed
+        runner.expectEqual(table.lookup(symbol: symX), 99)
+        runner.expectEqual(table.lookup(symbol: symY), 20) // parent visible
+
+        // Pop inner scope
+        table.popScope()
+        runner.expectEqual(table.lookup(symbol: symX), 10) // restored
+    }
+}
+
+runner.suite("ArenaAllocator Monotonic Memory Management") {
+    runner.test("Contiguous allocation and typed creation") {
+        let arena = ArenaAllocator(chunkSize: 1024)
+        let ptr1 = arena.create(42)
+        let ptr2 = arena.create(100)
+        runner.expectEqual(ptr1.pointee, 42)
+        runner.expectEqual(ptr2.pointee, 100)
+
+        arena.reset()
+        runner.expectEqual(arena.bytesAllocated, 0)
     }
 }
 
