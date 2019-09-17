@@ -213,4 +213,60 @@ runner.suite("ArenaAllocator Monotonic Memory Management") {
     }
 }
 
+runner.suite("DisjointSet Backtrackable Union-Find & Proof Forest") {
+    runner.test("Basic union and equivalence") {
+        let uf = DisjointSet()
+        let a = uf.makeSet()
+        let b = uf.makeSet()
+        let c = uf.makeSet()
+        let d = uf.makeSet()
+
+        runner.expectFalse(uf.areEquivalent(a, b))
+        uf.union(a, b, reason: 101)
+        runner.expectTrue(uf.areEquivalent(a, b))
+
+        uf.union(b, c, reason: 102)
+        runner.expectTrue(uf.areEquivalent(a, c))
+        runner.expectFalse(uf.areEquivalent(a, d))
+    }
+
+    runner.test("Proof forest conflict explanation") {
+        let uf = DisjointSet()
+        let a = uf.makeSet()
+        let b = uf.makeSet()
+        let c = uf.makeSet()
+
+        uf.union(a, b, reason: 42)
+        uf.union(b, c, reason: 84)
+
+        let reasonsBC = uf.explainEquivalence(b, c)
+        runner.expectTrue(reasonsBC.contains(42))
+        runner.expectTrue(reasonsBC.contains(84))
+
+        let reasonsAB = uf.explainEquivalence(a, b)
+        runner.expectTrue(reasonsAB.contains(42))
+        runner.expectEqual(reasonsAB.count, 1)
+    }
+
+    runner.test("Checkpoints and backtracking restoration") {
+        let uf = DisjointSet()
+        let a = uf.makeSet()
+        let b = uf.makeSet()
+        let c = uf.makeSet()
+
+        uf.union(a, b, reason: 1)
+        runner.expectTrue(uf.areEquivalent(a, b))
+
+        let cp = uf.pushCheckpoint()
+        uf.union(b, c, reason: 2)
+        runner.expectTrue(uf.areEquivalent(a, c))
+
+        // Backtrack to checkpoint
+        uf.popCheckpoint(to: cp)
+        runner.expectTrue(uf.areEquivalent(a, b))
+        runner.expectFalse(uf.areEquivalent(a, c))
+        runner.expectFalse(uf.areEquivalent(b, c))
+    }
+}
+
 runner.reportAndExit()
