@@ -132,8 +132,8 @@ public final class DisjointSet: @unchecked Sendable {
     /// Returns the path of proof reasons connecting a and b in the union-find forest.
     public func explainEquivalence(_ a: Int, _ b: Int) -> [UInt32] {
         precondition(areEquivalent(a, b), "Elements are not equivalent; cannot explain")
-        var pathA = pathToRoot(a)
-        var pathB = pathToRoot(b)
+        let pathA = pathToRoot(a)
+        let pathB = pathToRoot(b)
 
         // Find Lowest Common Ancestor (LCA)
         var lcaIndexA = pathA.count - 1
