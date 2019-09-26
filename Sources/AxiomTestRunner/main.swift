@@ -269,4 +269,79 @@ runner.suite("DisjointSet Backtrackable Union-Find & Proof Forest") {
     }
 }
 
+runner.suite("IndexedPriorityQueue SAT VSIDS Heuristics") {
+    runner.test("Max-heap extraction and O(log n) decrease-key") {
+        var pq = IndexedPriorityQueue<String, Double>.maxHeap()
+        pq.insert(element: "v1", priority: 1.5)
+        pq.insert(element: "v2", priority: 3.2)
+        pq.insert(element: "v3", priority: 0.8)
+
+        runner.expectEqual(pq.peek()?.element, "v2")
+        // Bump v3 activity score
+        pq.updatePriority(element: "v3", newPriority: 5.0)
+        runner.expectEqual(pq.peek()?.element, "v3")
+
+        let first = pq.pop()
+        runner.expectEqual(first?.element, "v3")
+        runner.expectEqual(first?.priority, 5.0)
+
+        let second = pq.pop()
+        runner.expectEqual(second?.element, "v2")
+        runner.expectEqual(second?.priority, 3.2)
+    }
+}
+
+runner.suite("BitSet Dense Visited Sets & Word Packing") {
+    runner.test("Insertion, popcount, and iterator traversal") {
+        var bs = BitSet(capacity: 256)
+        bs.insert(5)
+        bs.insert(63)
+        bs.insert(64)
+        bs.insert(128)
+
+        runner.expectEqual(bs.count, 4)
+        runner.expectTrue(bs.contains(5))
+        runner.expectTrue(bs.contains(64))
+        runner.expectFalse(bs.contains(65))
+
+        let elements = Array(bs)
+        runner.expectEqual(elements, [5, 63, 64, 128])
+    }
+
+    runner.test("BitSet set algebra: union and intersection") {
+        var s1 = BitSet(capacity: 128)
+        var s2 = BitSet(capacity: 128)
+        s1.insert(10)
+        s1.insert(20)
+        s2.insert(20)
+        s2.insert(30)
+
+        var u = s1
+        u.formUnion(s2)
+        runner.expectEqual(u.count, 3)
+
+        var i = s1
+        i.formIntersection(s2)
+        runner.expectEqual(i.count, 1)
+        runner.expectTrue(i.contains(20))
+    }
+}
+
+runner.suite("RingBuffer Rolling Diagnostics") {
+    runner.test("Sliding window average and circular overwrite") {
+        var rb = RingBuffer<Double>(capacity: 3)
+        rb.push(10.0)
+        rb.push(20.0)
+        runner.expectEqual(rb.average, 15.0)
+
+        rb.push(30.0)
+        runner.expectEqual(rb.average, 20.0)
+
+        // Overwrite 10.0 with 40.0 -> [40, 20, 30] -> avg 30.0
+        rb.push(40.0)
+        runner.expectEqual(rb.count, 3)
+        runner.expectEqual(rb.average, 30.0)
+    }
+}
+
 runner.reportAndExit()
