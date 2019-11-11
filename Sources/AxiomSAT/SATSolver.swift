@@ -122,9 +122,9 @@ public final class SATSolver: @unchecked Sendable {
         let clause = Clause(literals: cleaned, isLearned: false)
         let cIdx = clauseDb.addClause(clause)
 
-        // Attach 2 watchers
-        watches.addWatch(literal: ~cleaned[0], watcher: Watcher(clauseIndex: cIdx, blocker: cleaned[1]))
-        watches.addWatch(literal: ~cleaned[1], watcher: Watcher(clauseIndex: cIdx, blocker: cleaned[0]))
+        // Attach 2 watchers to the first two literals in the clause
+        watches.addWatch(literal: cleaned[0], watcher: Watcher(clauseIndex: cIdx, blocker: cleaned[1]))
+        watches.addWatch(literal: cleaned[1], watcher: Watcher(clauseIndex: cIdx, blocker: cleaned[0]))
 
         return true
     }
@@ -179,7 +179,7 @@ public final class SATSolver: @unchecked Sendable {
                 for k in 2..<clause.count {
                     if trail.value(of: clause[k]) != .false {
                         clause.literals.swapAt(1, k)
-                        watches.addWatch(literal: ~clause[1], watcher: w)
+                        watches.addWatch(literal: clause[1], watcher: w)
                         foundNewWatch = true
                         break
                     }
@@ -268,8 +268,8 @@ public final class SATSolver: @unchecked Sendable {
                     stats.learnedClauses += 1
 
                     // Watch the two highest level literals (0 is asserting 1-UIP)
-                    watches.addWatch(literal: ~learned[0], watcher: Watcher(clauseIndex: newIdx, blocker: learned[1]))
-                    watches.addWatch(literal: ~learned[1], watcher: Watcher(clauseIndex: newIdx, blocker: learned[0]))
+                    watches.addWatch(literal: learned[0], watcher: Watcher(clauseIndex: newIdx, blocker: learned[1]))
+                    watches.addWatch(literal: learned[1], watcher: Watcher(clauseIndex: newIdx, blocker: learned[0]))
 
                     // Assert 1-UIP literal
                     trail.assign(literal: learned[0], reason: newIdx)

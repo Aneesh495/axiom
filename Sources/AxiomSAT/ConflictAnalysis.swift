@@ -43,6 +43,11 @@ public final class ConflictAnalyzer: @unchecked Sendable {
 
         while true {
             for lit in currentClause.literals {
+                // Skip the pivot variable that was resolved
+                if p != .undefined && lit.variable == p.variable {
+                    continue
+                }
+
                 let v = lit.variable
                 ensureCapacity(forVariable: v)
                 let vIdx = Int(v)
@@ -85,6 +90,9 @@ public final class ConflictAnalyzer: @unchecked Sendable {
             currentClause = clauses[reasonIdx]
         }
 
+        // Recursive clause minimization (seen is true for learnedLits[1...])
+        let minimizedLits = minimizeLearnedClause(learnedLits, trail: trail, clauses: clauses)
+
         // Clean seen flags for remaining learned literals
         for lit in learnedLits {
             if lit != .undefined {
@@ -93,24 +101,32 @@ public final class ConflictAnalyzer: @unchecked Sendable {
             }
         }
 
-        // Recursive clause minimization
-        let minimizedLits = minimizeLearnedClause(learnedLits, trail: trail, clauses: clauses)
+        // Recompute backtrack level after minimization and place highest-level literal at index 1
+        var finalBacktrackLevel: Int32 = 0
+        var maxIdx = 1
+        var finalLits = minimizedLits
+        if finalLits.count > 1 {
+            for i in 1..<finalLits.count {
+                let lvl = trail.level(of: finalLits[i].variable)
+                if lvl > finalBacktrackLevel {
+                    finalBacktrackLevel = lvl
+                    maxIdx = i
+                }
+            }
+            if maxIdx != 1 {
+                finalLits.swapAt(1, maxIdx)
+            }
+        }
 
         // Compute Literal Block Distance (LBD)
         var levelsSeen = Set<Int32>()
-        for lit in minimizedLits {
+        for lit in finalLits {
             levelsSeen.insert(trail.level(of: lit.variable))
         }
         let lbd = UInt16(Swift.max(1, levelsSeen.count))
 
-        // Recompute backtrack level after minimization
-        var finalBacktrackLevel: Int32 = 0
-        for i in 1..<minimizedLits.count {
-            finalBacktrackLevel = Swift.max(finalBacktrackLevel, trail.level(of: minimizedLits[i].variable))
-        }
-
         return ConflictResult(
-            learnedClause: minimizedLits,
+            learnedClause: finalLits,
             backtrackLevel: finalBacktrackLevel,
             lbd: lbd
         )

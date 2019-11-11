@@ -1,6 +1,7 @@
 import Foundation
 import AxiomCore
 import AxiomAST
+import AxiomSAT
 
 let runner = TestHarness.shared
 
@@ -470,6 +471,145 @@ runner.suite("AxiomAST Serialization and Pretty Printing") {
 
         let infixPrinter = ASTPrinter(style: .infix)
         runner.expectEqual(infixPrinter.printExpr(formula), "x + 2 * y ≤ 10")
+    }
+}
+
+runner.suite("AxiomSAT CDCL Solver & Verification Benchmarks") {
+    runner.test("Basic satisfiable and unsatisfiable CNF instances") {
+        let solver1 = SATSolver()
+        let x1 = Literal(variable: 0, isNegated: false)
+        let x2 = Literal(variable: 1, isNegated: false)
+
+        // (x1 or x2) and (~x1 or x2)
+        solver1.addClause([x1, x2])
+        solver1.addClause([~x1, x2])
+        let res1 = solver1.solve()
+        runner.expectEqual(res1, .sat)
+        runner.expectEqual(solver1.modelValue(for: 1), true)
+
+        let solver2 = SATSolver()
+        // (x1) and (~x1) -> UNSAT
+        solver2.addClause([x1])
+        solver2.addClause([~x1])
+        let res2 = solver2.solve()
+        runner.expectEqual(res2, .unsat)
+    }
+
+    runner.test("Pigeonhole Principle PHP(4, 3) Provable UNSAT") {
+        let solver = SATSolver()
+        let pigeons = 4
+        let holes = 3
+
+        func pVar(_ p: Int, _ h: Int) -> Literal {
+            return Literal(variable: Int32(p * holes + h), isNegated: false)
+        }
+
+        // Each pigeon must be in at least one hole: clause (p_i1 or p_i2 or ... or p_im)
+        for p in 0..<pigeons {
+            var clause: [Literal] = []
+            for h in 0..<holes {
+                clause.append(pVar(p, h))
+            }
+            solver.addClause(clause)
+        }
+
+        // No two pigeons in the same hole: clause (~p_ih or ~p_jh)
+        for h in 0..<holes {
+            for p1 in 0..<pigeons {
+                for p2 in (p1 + 1)..<pigeons {
+                    solver.addClause([~pVar(p1, h), ~pVar(p2, h)])
+                }
+            }
+        }
+
+        let res = solver.solve()
+        runner.expectEqual(res, .unsat)
+        runner.expectTrue(solver.stats.conflicts > 0)
+    }
+
+    runner.test("4-Queens Puzzle Satisfiability & Placement Model") {
+        let solver = SATSolver()
+        let n = 4
+
+        func qVar(_ r: Int, _ c: Int) -> Literal {
+            return Literal(variable: Int32(r * n + c), isNegated: false)
+        }
+
+        // At least one queen per row
+        for r in 0..<n {
+            var clause: [Literal] = []
+            for c in 0..<n {
+                clause.append(qVar(r, c))
+            }
+            solver.addClause(clause)
+        }
+
+        // At most one queen per row
+        for r in 0..<n {
+            for c1 in 0..<n {
+                for c2 in (c1 + 1)..<n {
+                    solver.addClause([~qVar(r, c1), ~qVar(r, c2)])
+                }
+            }
+        }
+
+        // At most one queen per column
+        for c in 0..<n {
+            for r1 in 0..<n {
+                for r2 in (r1 + 1)..<n {
+                    solver.addClause([~qVar(r1, c), ~qVar(r2, c)])
+                }
+            }
+        }
+
+        // At most one queen per diagonal
+        for r1 in 0..<n {
+            for c1 in 0..<n {
+                for r2 in (r1 + 1)..<n {
+                    for c2 in 0..<n {
+                        if Swift.abs(r1 - r2) == Swift.abs(c1 - c2) {
+                            solver.addClause([~qVar(r1, c1), ~qVar(r2, c2)])
+                        }
+                    }
+                }
+            }
+        }
+
+        let res = solver.solve()
+        runner.expectEqual(res, .sat)
+
+        // Verify exactly 4 queens placed
+        var queensPlaced = 0
+        for r in 0..<n {
+            for c in 0..<n {
+                if solver.modelValue(for: qVar(r, c).variable) {
+                    queensPlaced += 1
+                }
+            }
+        }
+        runner.expectEqual(queensPlaced, 4)
+    }
+
+    runner.test("Incremental solving with assumption literals") {
+        let solver = SATSolver()
+        let a = Literal(variable: 0, isNegated: false)
+        let b = Literal(variable: 1, isNegated: false)
+
+        // a or b
+        solver.addClause([a, b])
+
+        // Under assumption ~a: b must be true
+        let res1 = solver.solve(assumptions: [~a])
+        runner.expectEqual(res1, .sat)
+        runner.expectEqual(solver.modelValue(for: b.variable), true)
+
+        // Under assumption ~a and ~b: UNSAT
+        let res2 = solver.solve(assumptions: [~a, ~b])
+        runner.expectEqual(res2, .unsat)
+
+        // Under no assumptions: SAT
+        let res3 = solver.solve(assumptions: [])
+        runner.expectEqual(res3, .sat)
     }
 }
 
