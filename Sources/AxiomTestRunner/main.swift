@@ -2,6 +2,7 @@ import Foundation
 import AxiomCore
 import AxiomAST
 import AxiomSAT
+import AxiomTheories
 
 let runner = TestHarness.shared
 
@@ -610,6 +611,71 @@ runner.suite("AxiomSAT CDCL Solver & Verification Benchmarks") {
         // Under no assumptions: SAT
         let res3 = solver.solve(assumptions: [])
         runner.expectEqual(res3, .sat)
+    }
+}
+
+runner.suite("AxiomTheories EUF Congruence Closure & Explanations") {
+    runner.test("Transitivity of equality in E-graph") {
+        let euf = EUFSolver()
+        let sortU = Sort.uninterpreted(name: "U", arity: 0)
+        let a = Expr.variable(name: "a", sort: sortU)
+        let b = Expr.variable(name: "b", sort: sortU)
+        let c = Expr.variable(name: "c", sort: sortU)
+
+        runner.expectEqual(euf.assertLiteral(.eq(a, b)), .consistent)
+        runner.expectEqual(euf.assertLiteral(.eq(b, c)), .consistent)
+        runner.expectTrue(euf.areEquivalent(a, c))
+    }
+
+    runner.test("Function congruence rule f(x) == f(y)") {
+        let euf = EUFSolver()
+        let sortU = Sort.uninterpreted(name: "U", arity: 0)
+        let x = Expr.variable(name: "x", sort: sortU)
+        let y = Expr.variable(name: "y", sort: sortU)
+        let fx = Expr.apply(function: "f", arguments: [x], returnSort: sortU)
+        let fy = Expr.apply(function: "f", arguments: [y], returnSort: sortU)
+
+        euf.intern(term: fx)
+        euf.intern(term: fy)
+
+        runner.expectFalse(euf.areEquivalent(fx, fy))
+        runner.expectEqual(euf.assertLiteral(.eq(x, y)), .consistent)
+        runner.expectTrue(euf.areEquivalent(fx, fy))
+    }
+
+    runner.test("Disequality conflict refutation and proof explanation") {
+        let euf = EUFSolver()
+        let sortU = Sort.uninterpreted(name: "U", arity: 0)
+        let a = Expr.variable(name: "a", sort: sortU)
+        let b = Expr.variable(name: "b", sort: sortU)
+        let c = Expr.variable(name: "c", sort: sortU)
+
+        runner.expectEqual(euf.assertLiteral(.eq(a, b)), .consistent)
+        runner.expectEqual(euf.assertLiteral(.eq(b, c)), .consistent)
+
+        // Now assert a != c: should immediately detect conflict
+        let conflictRes = euf.assertLiteral(.not(.eq(a, c)))
+        if case let .conflict(explanation) = conflictRes {
+            runner.expectTrue(explanation.contains(.eq(a, b)))
+            runner.expectTrue(explanation.contains(.eq(b, c)))
+            runner.expectTrue(explanation.contains(.not(.eq(a, c))))
+        } else {
+            runner.expectTrue(false, "Expected conflict for inconsistent EUF equalities and disequality")
+        }
+    }
+
+    runner.test("Incremental backtracking and scope popping") {
+        let euf = EUFSolver()
+        let sortU = Sort.uninterpreted(name: "U", arity: 0)
+        let p = Expr.variable(name: "p", sort: sortU)
+        let q = Expr.variable(name: "q", sort: sortU)
+
+        euf.pushScope()
+        runner.expectEqual(euf.assertLiteral(.eq(p, q)), .consistent)
+        runner.expectTrue(euf.areEquivalent(p, q))
+
+        euf.popScope()
+        runner.expectFalse(euf.areEquivalent(p, q))
     }
 }
 
