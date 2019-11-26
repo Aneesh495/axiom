@@ -1,0 +1,534 @@
+import Foundation
+import AxiomCore
+import AxiomAST
+import AxiomSAT
+
+/// A bound on a linear real arithmetic variable with justification expression.
+public struct BoundInfo: Sendable, Equatable {
+    public let value: Rational
+    public let reason: Expr
+    public let isStrict: Bool
+
+    public init(value: Rational, reason: Expr, isStrict: Bool = false) {
+        self.value = value
+        self.reason = reason
+        self.isStrict = isStrict
+    }
+}
+
+/// A linear term represented as a linear combination of variables with exact rational coefficients.
+public struct LinearPolynomial: Sendable {
+    public var terms: [Int: Rational] // variableId -> coefficient
+    public var constant: Rational
+
+    public init(terms: [Int: Rational] = [:], constant: Rational = .zero) {
+        self.terms = terms
+        self.constant = constant
+    }
+
+    public mutating func addTerm(variable: Int, coefficient: Rational) {
+        let newCoeff = (terms[variable] ?? .zero) + coefficient
+        if newCoeff.isZero {
+            terms.removeValue(forKey: variable)
+        } else {
+            terms[variable] = newCoeff
+        }
+    }
+}
+
+/// Incremental Dual Simplex tableau solver for Quantifier-Free Linear Real Arithmetic (QF_LRA).
+/// Implements the Dutertre-de Moura algorithm with exact rational arithmetic.
+public final class LRASolver: TheorySolver, @unchecked Sendable {
+    public let theoryId: TheoryId = .lra
+
+    // Variable management
+    public private(set) var varCount: Int = 0
+    private var exprToVar: [Expr: Int] = [:]
+    private var varToExpr: [Int: Expr] = [:]
+
+    // Tableau representation: basicVar -> (nonBasicVar -> coefficient)
+    // Invariant: basicVar = sum(a_ij * x_j)
+    private var tableau: [Int: [Int: Rational]] = [:]
+    private var basicVars: Set<Int> = []
+    private var nonBasicVars: Set<Int> = []
+
+    // Bounds and assignments
+    private var lowerBounds: [Int: BoundInfo] = [:]
+    private var upperBounds: [Int: BoundInfo] = [:]
+    private var values: [Int: Rational] = [:]
+
+    // Backtracking undo history
+    private struct BoundUndo: Sendable {
+        let variable: Int
+        let oldLower: BoundInfo?
+        let oldUpper: BoundInfo?
+    }
+
+    private var undoHistory: [BoundUndo] = []
+    private var scopeLimits: [Int] = []
+
+    // Asserted input constraints
+    private var assertedConstraints: [Expr] = []
+    private var pendingDeductions: [TheoryDeduction] = []
+
+    public init() {}
+
+    // MARK: - Variable & Term Allocation
+
+    /// Register an expression as an LRA variable.
+    public func registerVariable(_ expr: Expr) -> Int {
+        if let existing = exprToVar[expr] {
+            return existing
+        }
+        let v = varCount
+        varCount += 1
+        exprToVar[expr] = v
+        varToExpr[v] = expr
+        nonBasicVars.insert(v)
+        values[v] = .zero
+        return v
+    }
+
+    // MARK: - Tableau Construction & Pivoting
+
+    /// Add a constraint as a new row in the tableau: basicVar = sum(coeff * nonBasicVar)
+    public func addRow(basicVar: Int, terms: [Int: Rational]) {
+        tableau[basicVar] = terms
+        basicVars.insert(basicVar)
+        nonBasicVars.remove(basicVar)
+        values[basicVar] = computeRowValue(basicVar)
+    }
+
+    private func computeRowValue(_ basicVar: Int) -> Rational {
+        guard let row = tableau[basicVar] else { return .zero }
+        var sum = Rational.zero
+        for (nbVar, coeff) in row {
+            sum = sum + coeff * (values[nbVar] ?? .zero)
+        }
+        return sum
+    }
+
+    /// Perform a standard Gauss-Jordan tableau pivot swapping basicVar and nonBasicVar.
+    public func pivot(basic: Int, nonBasic: Int) {
+        guard var pivotRow = tableau[basic], let a_ij = pivotRow[nonBasic], !a_ij.isZero else {
+            return
+        }
+
+        // 1. Solve pivot row for nonBasic:
+        // x_i = a_ij * x_j + sum_{k != j} a_ik * x_k
+        // <=> x_j = (1 / a_ij) * x_i - sum_{k != j} (a_ik / a_ij) * x_k
+        pivotRow.removeValue(forKey: nonBasic)
+        let invA = Rational(1) / a_ij
+
+        var newNonBasicRow: [Int: Rational] = [:]
+        newNonBasicRow[basic] = invA
+        for (k, coeff) in pivotRow {
+            newNonBasicRow[k] = -coeff * invA
+        }
+
+        tableau.removeValue(forKey: basic)
+        tableau[nonBasic] = newNonBasicRow
+
+        // 2. Substitute new expression into all other rows
+        for (otherBasic, otherRow) in tableau where otherBasic != nonBasic {
+            if let a_kj = otherRow[nonBasic], !a_kj.isZero {
+                var updatedRow = otherRow
+                updatedRow.removeValue(forKey: nonBasic)
+                for (k, coeff) in newNonBasicRow {
+                    let existing = updatedRow[k] ?? .zero
+                    let newCoeff = existing + a_kj * coeff
+                    if newCoeff.isZero {
+                        updatedRow.removeValue(forKey: k)
+                    } else {
+                        updatedRow[k] = newCoeff
+                    }
+                }
+                tableau[otherBasic] = updatedRow
+            }
+        }
+
+        // 3. Update variable partition
+        basicVars.remove(basic)
+        nonBasicVars.insert(basic)
+        basicVars.insert(nonBasic)
+        nonBasicVars.remove(nonBasic)
+    }
+
+    // MARK: - Dual Simplex Feasibility Check
+
+    /// Run Dual Simplex to restore feasibility across all basic variable bounds.
+    public func checkFeasibility() -> TheoryResult {
+        let maxIterations = 5000
+        var iteration = 0
+
+        while iteration < maxIterations {
+            iteration += 1
+
+            // Find a basic variable that violates its bounds
+            guard let violatingBasic = findViolatingBasicVar() else {
+                // All basic variables satisfy their bounds: tableau is feasible!
+                return .consistent
+            }
+
+            let val = values[violatingBasic] ?? .zero
+            let isLowerViolation = lowerBounds[violatingBasic] != nil && val < lowerBounds[violatingBasic]!.value
+
+            // Find candidate non-basic variable to pivot with
+            guard let pivotCol = findPivotColumn(basicVar: violatingBasic, isLowerViolation: isLowerViolation) else {
+                // No column can repair the violation: unsatisfiable conflict!
+                let explanation = buildFarkasConflict(violatingBasic: violatingBasic, isLowerViolation: isLowerViolation)
+                return .conflict(explanation: explanation)
+            }
+
+            // Update value of nonBasic to repair violatingBasic
+            let delta = isLowerViolation
+                ? (lowerBounds[violatingBasic]!.value - val)
+                : (upperBounds[violatingBasic]!.value - val)
+            let a_ij = tableau[violatingBasic]![pivotCol]!
+            let theta = delta / a_ij
+
+            values[pivotCol] = (values[pivotCol] ?? .zero) + theta
+            pivot(basic: violatingBasic, nonBasic: pivotCol)
+
+            // Recompute values for all basic variables
+            for bVar in basicVars {
+                values[bVar] = computeRowValue(bVar)
+            }
+        }
+
+        return .consistent
+    }
+
+    /// Select basic variable violating bounds using Bland's rule (smallest variable index).
+    private func findViolatingBasicVar() -> Int? {
+        var candidates: [Int] = []
+        for bVar in basicVars {
+            let val = values[bVar] ?? .zero
+            if let lb = lowerBounds[bVar], val < lb.value {
+                candidates.append(bVar)
+            } else if let ub = upperBounds[bVar], val > ub.value {
+                candidates.append(bVar)
+            }
+        }
+        return candidates.min()
+    }
+
+    /// Select non-basic variable to pivot using Bland's rule.
+    private func findPivotColumn(basicVar: Int, isLowerViolation: Bool) -> Int? {
+        guard let row = tableau[basicVar] else { return nil }
+        var validCandidates: [Int] = []
+
+        for (nbVar, coeff) in row {
+            let nbVal = values[nbVar] ?? .zero
+            if isLowerViolation {
+                // Need to increase basicVar
+                // coeff > 0: can increase nbVar if nbVal < upperBound
+                if coeff > .zero {
+                    if upperBounds[nbVar] == nil || nbVal < upperBounds[nbVar]!.value {
+                        validCandidates.append(nbVar)
+                    }
+                } else if coeff < .zero {
+                    // coeff < 0: can decrease nbVar if nbVal > lowerBound
+                    if lowerBounds[nbVar] == nil || nbVal > lowerBounds[nbVar]!.value {
+                        validCandidates.append(nbVar)
+                    }
+                }
+            } else {
+                // Need to decrease basicVar
+                if coeff > .zero {
+                    if lowerBounds[nbVar] == nil || nbVal > lowerBounds[nbVar]!.value {
+                        validCandidates.append(nbVar)
+                    }
+                } else if coeff < .zero {
+                    if upperBounds[nbVar] == nil || nbVal < upperBounds[nbVar]!.value {
+                        validCandidates.append(nbVar)
+                    }
+                }
+            }
+        }
+
+        return validCandidates.min() // Bland's anti-cycling rule
+    }
+
+    /// Generate Farkas conflict certificate from an unpivotable row.
+    public func buildFarkasConflict(violatingBasic: Int, isLowerViolation: Bool) -> [Expr] {
+        var explanation: [Expr] = []
+        if isLowerViolation {
+            if let lb = lowerBounds[violatingBasic] {
+                explanation.append(lb.reason)
+            }
+        } else {
+            if let ub = upperBounds[violatingBasic] {
+                explanation.append(ub.reason)
+            }
+        }
+
+        if let row = tableau[violatingBasic] {
+            for (nbVar, coeff) in row {
+                if isLowerViolation {
+                    if coeff > .zero, let ub = upperBounds[nbVar] {
+                        explanation.append(ub.reason)
+                    } else if coeff < .zero, let lb = lowerBounds[nbVar] {
+                        explanation.append(lb.reason)
+                    }
+                } else {
+                    if coeff > .zero, let lb = lowerBounds[nbVar] {
+                        explanation.append(lb.reason)
+                    } else if coeff < .zero, let ub = upperBounds[nbVar] {
+                        explanation.append(ub.reason)
+                    }
+                }
+            }
+        }
+
+        return explanation
+    }
+
+    // MARK: - Bounds Management
+
+    /// Set an upper or lower bound on a variable.
+    public func setBound(variable: Int, bound: BoundInfo, isLower: Bool) -> TheoryResult {
+        let oldLower = lowerBounds[variable]
+        let oldUpper = upperBounds[variable]
+
+        if isLower {
+            if let current = oldLower, bound.value <= current.value {
+                return .consistent // Weaker than current bound
+            }
+            if let currentUb = oldUpper, bound.value > currentUb.value {
+                // Immediate bound clash
+                return .conflict(explanation: [bound.reason, currentUb.reason])
+            }
+            lowerBounds[variable] = bound
+        } else {
+            if let current = oldUpper, bound.value >= current.value {
+                return .consistent
+            }
+            if let currentLb = oldLower, bound.value < currentLb.value {
+                // Immediate bound clash
+                return .conflict(explanation: [bound.reason, currentLb.reason])
+            }
+            upperBounds[variable] = bound
+        }
+
+        undoHistory.append(BoundUndo(variable: variable, oldLower: oldLower, oldUpper: oldUpper))
+
+        // If variable is non-basic and its current value violates the new bound, adjust it
+        if nonBasicVars.contains(variable) {
+            let val = values[variable] ?? .zero
+            if isLower && val < bound.value {
+                values[variable] = bound.value
+            } else if !isLower && val > bound.value {
+                values[variable] = bound.value
+            }
+            // Update all basic variables
+            for bVar in basicVars {
+                values[bVar] = computeRowValue(bVar)
+            }
+        }
+
+        return checkFeasibility()
+    }
+
+    // MARK: - TheorySolver Conformance
+
+    public func pushScope() {
+        scopeLimits.append(undoHistory.count)
+    }
+
+    public func popScope() {
+        guard let limit = scopeLimits.popLast() else { return }
+        while undoHistory.count > limit {
+            let undo = undoHistory.removeLast()
+            lowerBounds[undo.variable] = undo.oldLower
+            upperBounds[undo.variable] = undo.oldUpper
+        }
+        for bVar in basicVars {
+            values[bVar] = computeRowValue(bVar)
+        }
+    }
+
+    public func reset() {
+        varCount = 0
+        exprToVar.removeAll(keepingCapacity: true)
+        varToExpr.removeAll(keepingCapacity: true)
+        tableau.removeAll(keepingCapacity: true)
+        basicVars.removeAll(keepingCapacity: true)
+        nonBasicVars.removeAll(keepingCapacity: true)
+        lowerBounds.removeAll(keepingCapacity: true)
+        upperBounds.removeAll(keepingCapacity: true)
+        values.removeAll(keepingCapacity: true)
+        undoHistory.removeAll(keepingCapacity: true)
+        scopeLimits.removeAll(keepingCapacity: true)
+        assertedConstraints.removeAll(keepingCapacity: true)
+        pendingDeductions.removeAll(keepingCapacity: true)
+    }
+
+    public func assertLiteral(_ literal: Expr) -> TheoryResult {
+        assertedConstraints.append(literal)
+
+        // Parse linear constraint: e.g. x <= 5, x >= 0, x - y <= 2, x == y
+        switch literal {
+        case let .le(lhs, rhs):
+            return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: false, originalExpr: literal)
+        case let .lt(lhs, rhs):
+            return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: false, originalExpr: literal)
+        case let .ge(lhs, rhs):
+            return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: true, originalExpr: literal)
+        case let .gt(lhs, rhs):
+            return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: true, originalExpr: literal)
+        case let .eq(lhs, rhs):
+            let r1 = assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: false, originalExpr: literal)
+            if case .conflict = r1 { return r1 }
+            return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: true, originalExpr: literal)
+        case let .not(inner):
+            // Invert condition
+            switch inner {
+            case let .le(lhs, rhs):
+                return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: true, originalExpr: literal)
+            case let .lt(lhs, rhs):
+                return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: true, originalExpr: literal)
+            case let .ge(lhs, rhs):
+                return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: false, originalExpr: literal)
+            case let .gt(lhs, rhs):
+                return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: false, originalExpr: literal)
+            default:
+                return .consistent
+            }
+        default:
+            return .consistent
+        }
+    }
+
+    private func assertInequality(
+        lhs: Expr,
+        rhs: Expr,
+        isStrict: Bool,
+        isGreater: Bool,
+        originalExpr: Expr
+    ) -> TheoryResult {
+        // Form: poly <= constant or poly >= constant
+        let poly = toPolynomial(expr: lhs) - toPolynomial(expr: rhs)
+
+        if poly.terms.isEmpty {
+            // Constant inequality: e.g. 0 <= 5
+            let isSatisfied = isGreater
+                ? (isStrict ? -poly.constant > .zero : -poly.constant >= .zero)
+                : (isStrict ? poly.constant < .zero : poly.constant <= .zero)
+            if !isSatisfied {
+                return .conflict(explanation: [originalExpr])
+            }
+            return .consistent
+        }
+
+        if poly.terms.count == 1, let (v, coeff) = poly.terms.first {
+            // Single variable bound: coeff * x + c <= 0 <=> coeff * x <= -c
+            let boundVal = -poly.constant / coeff
+            let isLower = (coeff > .zero && isGreater) || (coeff < .zero && !isGreater)
+            let boundInfo = BoundInfo(value: boundVal, reason: originalExpr, isStrict: isStrict)
+            return setBound(variable: v, bound: boundInfo, isLower: isLower)
+        }
+
+        // Multi-variable: introduce auxiliary slack variable s = sum(coeff * x)
+        let slackExpr = Expr.variable(name: Symbol("slack_\(varCount)"), sort: .real)
+        let s = registerVariable(slackExpr)
+        addRow(basicVar: s, terms: poly.terms)
+
+        let boundVal = -poly.constant
+        let boundInfo = BoundInfo(value: boundVal, reason: originalExpr, isStrict: isStrict)
+        return setBound(variable: s, bound: boundInfo, isLower: isGreater)
+    }
+
+    private func toPolynomial(expr: Expr) -> LinearPolynomial {
+        switch expr {
+        case let .realConst(r):
+            return LinearPolynomial(constant: r)
+        case let .intConst(i):
+            return LinearPolynomial(constant: Rational(i))
+        case .variable:
+            let v = registerVariable(expr)
+            return LinearPolynomial(terms: [v: Rational(1)], constant: .zero)
+        case let .add(terms):
+            var poly = LinearPolynomial()
+            for t in terms {
+                poly = poly + toPolynomial(expr: t)
+            }
+            return poly
+        case let .sub(a, b):
+            return toPolynomial(expr: a) - toPolynomial(expr: b)
+        case let .mul(terms):
+            // Linear multiplication: constant * expr
+            var constFactor = Rational(1)
+            var varPoly = LinearPolynomial()
+            var hasVar = false
+            for t in terms {
+                let p = toPolynomial(expr: t)
+                if p.terms.isEmpty {
+                    constFactor = constFactor * p.constant
+                } else if !hasVar {
+                    varPoly = p
+                    hasVar = true
+                }
+            }
+            if hasVar {
+                return varPoly * constFactor
+            } else {
+                return LinearPolynomial(constant: constFactor)
+            }
+        case let .neg(inner):
+            return toPolynomial(expr: inner) * Rational(-1)
+        default:
+            let v = registerVariable(expr)
+            return LinearPolynomial(terms: [v: Rational(1)], constant: .zero)
+        }
+    }
+
+    public func checkConsistency() -> TheoryResult {
+        return checkFeasibility()
+    }
+
+    public func propagateDeductions() -> [TheoryDeduction] {
+        let deds = pendingDeductions
+        pendingDeductions.removeAll(keepingCapacity: true)
+        return deds
+    }
+
+    public func collectSharedTerms() -> [Expr] {
+        return Array(exprToVar.keys)
+    }
+
+    public func variableValue(_ expr: Expr) -> Rational? {
+        guard let v = exprToVar[expr] else { return nil }
+        return values[v]
+    }
+}
+
+// MARK: - LinearPolynomial Arithmetic
+
+private func + (lhs: LinearPolynomial, rhs: LinearPolynomial) -> LinearPolynomial {
+    var terms = lhs.terms
+    for (v, coeff) in rhs.terms {
+        let sum = (terms[v] ?? .zero) + coeff
+        if sum.isZero {
+            terms.removeValue(forKey: v)
+        } else {
+            terms[v] = sum
+        }
+    }
+    return LinearPolynomial(terms: terms, constant: lhs.constant + rhs.constant)
+}
+
+private func - (lhs: LinearPolynomial, rhs: LinearPolynomial) -> LinearPolynomial {
+    return lhs + (rhs * Rational(-1))
+}
+
+private func * (lhs: LinearPolynomial, rhs: Rational) -> LinearPolynomial {
+    var terms: [Int: Rational] = [:]
+    for (v, coeff) in lhs.terms {
+        let prod = coeff * rhs
+        if !prod.isZero {
+            terms[v] = prod
+        }
+    }
+    return LinearPolynomial(terms: terms, constant: lhs.constant * rhs)
+}
