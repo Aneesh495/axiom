@@ -250,16 +250,28 @@ public final class LRASolver: TheorySolver, @unchecked Sendable {
         return validCandidates.min() // Bland's anti-cycling rule
     }
 
+/// Exact Farkas Lemma certificate of linear infeasibility.
+/// Represents a non-negative linear combination of constraints yielding an inconsistent bound.
+public struct FarkasCertificate: Sendable {
+    public let multipliers: [(constraint: Expr, multiplier: Rational)]
+    public let netConstant: Rational
+
+    public init(multipliers: [(constraint: Expr, multiplier: Rational)], netConstant: Rational) {
+        self.multipliers = multipliers
+        self.netConstant = netConstant
+    }
+}
+
     /// Generate Farkas conflict certificate from an unpivotable row.
     public func buildFarkasConflict(violatingBasic: Int, isLowerViolation: Bool) -> [Expr] {
-        var explanation: [Expr] = []
+        var rawExplanation: [Expr] = []
         if isLowerViolation {
             if let lb = lowerBounds[violatingBasic] {
-                explanation.append(lb.reason)
+                rawExplanation.append(lb.reason)
             }
         } else {
             if let ub = upperBounds[violatingBasic] {
-                explanation.append(ub.reason)
+                rawExplanation.append(ub.reason)
             }
         }
 
@@ -267,21 +279,75 @@ public final class LRASolver: TheorySolver, @unchecked Sendable {
             for (nbVar, coeff) in row {
                 if isLowerViolation {
                     if coeff > .zero, let ub = upperBounds[nbVar] {
-                        explanation.append(ub.reason)
+                        rawExplanation.append(ub.reason)
                     } else if coeff < .zero, let lb = lowerBounds[nbVar] {
-                        explanation.append(lb.reason)
+                        rawExplanation.append(lb.reason)
                     }
                 } else {
                     if coeff > .zero, let lb = lowerBounds[nbVar] {
-                        explanation.append(lb.reason)
+                        rawExplanation.append(lb.reason)
                     } else if coeff < .zero, let ub = upperBounds[nbVar] {
-                        explanation.append(ub.reason)
+                        rawExplanation.append(ub.reason)
                     }
                 }
             }
         }
 
-        return explanation
+        // Deduplicate while preserving first appearance order
+        var seen = Set<Expr>()
+        var deduped: [Expr] = []
+        for expr in rawExplanation {
+            if !seen.contains(expr) {
+                seen.insert(expr)
+                deduped.append(expr)
+            }
+        }
+        return deduped
+    }
+
+    /// Generate explicit linear Farkas multipliers proving infeasibility.
+    public func generateFarkasCertificate(violatingBasic: Int, isLowerViolation: Bool) -> FarkasCertificate? {
+        guard let row = tableau[violatingBasic] else { return nil }
+        var multipliers: [(constraint: Expr, multiplier: Rational)] = []
+        var netConstant = Rational.zero
+
+        if isLowerViolation {
+            guard let lb = lowerBounds[violatingBasic] else { return nil }
+            multipliers.append((lb.reason, Rational(1)))
+            netConstant = netConstant + lb.value
+
+            for (nbVar, coeff) in row {
+                if coeff > .zero {
+                    guard let ub = upperBounds[nbVar] else { return nil }
+                    multipliers.append((ub.reason, coeff))
+                    netConstant = netConstant - coeff * ub.value
+                } else if coeff < .zero {
+                    guard let lbNb = lowerBounds[nbVar] else { return nil }
+                    let mult = -coeff
+                    multipliers.append((lbNb.reason, mult))
+                    netConstant = netConstant + mult * lbNb.value
+                }
+            }
+        } else {
+            guard let ub = upperBounds[violatingBasic] else { return nil }
+            multipliers.append((ub.reason, Rational(1)))
+            netConstant = netConstant - ub.value
+
+            for (nbVar, coeff) in row {
+                if coeff > .zero {
+                    guard let lbNb = lowerBounds[nbVar] else { return nil }
+                    multipliers.append((lbNb.reason, coeff))
+                    netConstant = netConstant + coeff * lbNb.value
+                } else if coeff < .zero {
+                    guard let ubNb = upperBounds[nbVar] else { return nil }
+                    let mult = -coeff
+                    multipliers.append((ubNb.reason, mult))
+                    netConstant = netConstant - mult * ubNb.value
+                }
+            }
+        }
+
+        return FarkasCertificate(multipliers: multipliers, netConstant: netConstant)
     }
 
     // MARK: - Bounds Management
