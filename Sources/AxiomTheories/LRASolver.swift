@@ -549,13 +549,98 @@ public struct FarkasCertificate: Sendable {
         }
     }
 
+    /// Perform bound propagation across tableau rows to derive new bounds and shared equalities.
+    public func propagateBounds() -> [TheoryDeduction] {
+        var deductions: [TheoryDeduction] = []
+
+        for bVar in basicVars {
+            guard let row = tableau[bVar], let bExpr = varToExpr[bVar] else { continue }
+
+            // 1. Check if all non-basic variables have lower bounds (for a_ij > 0) and upper bounds (for a_ij < 0)
+            var canComputeLower = true
+            var impliedLb = Rational.zero
+            var lbReasons: [Expr] = []
+
+            for (nbVar, coeff) in row {
+                if coeff > .zero {
+                    if let lb = lowerBounds[nbVar] {
+                        impliedLb = impliedLb + coeff * lb.value
+                        lbReasons.append(lb.reason)
+                    } else {
+                        canComputeLower = false
+                        break
+                    }
+                } else if coeff < .zero {
+                    if let ub = upperBounds[nbVar] {
+                        impliedLb = impliedLb + coeff * ub.value
+                        lbReasons.append(ub.reason)
+                    } else {
+                        canComputeLower = false
+                        break
+                    }
+                }
+            }
+
+            if canComputeLower {
+                let currentLb = lowerBounds[bVar]?.value
+                if currentLb == nil || impliedLb > currentLb! {
+                    let deducedExpr = Expr.ge(bExpr, .realConst(impliedLb))
+                    deductions.append(TheoryDeduction(literal: deducedExpr, explanation: lbReasons))
+                }
+            }
+
+            // 2. Check if all non-basic variables have upper bounds (for a_ij > 0) and lower bounds (for a_ij < 0)
+            var canComputeUpper = true
+            var impliedUb = Rational.zero
+            var ubReasons: [Expr] = []
+
+            for (nbVar, coeff) in row {
+                if coeff > .zero {
+                    if let ub = upperBounds[nbVar] {
+                        impliedUb = impliedUb + coeff * ub.value
+                        ubReasons.append(ub.reason)
+                    } else {
+                        canComputeUpper = false
+                        break
+                    }
+                } else if coeff < .zero {
+                    if let lb = lowerBounds[nbVar] {
+                        impliedUb = impliedUb + coeff * lb.value
+                        ubReasons.append(lb.reason)
+                    } else {
+                        canComputeUpper = false
+                        break
+                    }
+                }
+            }
+
+            if canComputeUpper {
+                let currentUb = upperBounds[bVar]?.value
+                if currentUb == nil || impliedUb < currentUb! {
+                    let deducedExpr = Expr.le(bExpr, .realConst(impliedUb))
+                    deductions.append(TheoryDeduction(literal: deducedExpr, explanation: ubReasons))
+                }
+            }
+
+            // 3. Implied equality between variables: if x_i has lb == ub, emit equality
+            if let lb = lowerBounds[bVar], let ub = upperBounds[bVar], lb.value == ub.value {
+                let fixedVal = lb.value
+                let eqExpr = Expr.eq(bExpr, .realConst(fixedVal))
+                deductions.append(TheoryDeduction(literal: eqExpr, explanation: [lb.reason, ub.reason]))
+            }
+        }
+
+        return deductions
+    }
+
     public func checkConsistency() -> TheoryResult {
         return checkFeasibility()
     }
 
     public func propagateDeductions() -> [TheoryDeduction] {
-        let deds = pendingDeductions
+        var deds = pendingDeductions
         pendingDeductions.removeAll(keepingCapacity: true)
+        deds.append(contentsOf: propagateBounds())
         return deds
     }
 
