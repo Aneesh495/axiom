@@ -13,6 +13,10 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
     private var constraints: [Expr] = []
     private var scopeLimits: [Int] = []
 
+    private var isConflicted: Bool = false
+    private var conflictExplanation: [Expr] = []
+    private var conflictScopeLevel: Int? = nil
+
     public init() {
         self.simplex = LRASolver()
     }
@@ -39,11 +43,20 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
         // Check for Diophantine GCD infeasibility: e.g. 2x + 4y == 5
         if case let .eq(lhs, rhs) = literal {
             if let conflict = checkGCDInfeasibility(lhs: lhs, rhs: rhs, original: literal) {
+                isConflicted = true
+                conflictExplanation = [literal]
+                conflictScopeLevel = scopeLimits.count
                 return conflict
             }
         }
 
-        return simplex.assertLiteral(literal)
+        let res = simplex.assertLiteral(literal)
+        if case let .conflict(explanation) = res {
+            isConflicted = true
+            conflictExplanation = explanation
+            conflictScopeLevel = scopeLimits.count
+        }
+        return res
     }
 
     // MARK: - Diophantine Equation GCD Test
@@ -121,6 +134,10 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
 
     /// Check integer consistency by first solving the continuous relaxation and then branching.
     public func checkConsistency() -> TheoryResult {
+        if isConflicted {
+            return .conflict(explanation: conflictExplanation)
+        }
+
         // 1. Solve continuous relaxation
         let relaxResult = simplex.checkConsistency()
         if case .conflict = relaxResult {
@@ -192,6 +209,11 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
         while constraints.count > limit {
             _ = constraints.popLast()
         }
+        if let cLevel = conflictScopeLevel, cLevel > scopeLimits.count {
+            isConflicted = false
+            conflictExplanation = []
+            conflictScopeLevel = nil
+        }
         simplex.popScope()
     }
 
@@ -199,6 +221,9 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
         integerVars.removeAll(keepingCapacity: true)
         constraints.removeAll(keepingCapacity: true)
         scopeLimits.removeAll(keepingCapacity: true)
+        isConflicted = false
+        conflictExplanation = []
+        conflictScopeLevel = nil
         simplex.reset()
     }
 

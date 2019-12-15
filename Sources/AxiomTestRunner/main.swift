@@ -768,4 +768,70 @@ runner.suite("AxiomTheories QF_LRA Simplex & Farkas Certificates") {
     }
 }
 
+runner.suite("AxiomTheories QF_LIA Integer Arithmetic & Diophantine Verification") {
+    runner.test("Feasible linear integer system with exact integer solution") {
+        let lia = LIASolver()
+        let x = Expr.variable(name: "x", sort: .int)
+        let y = Expr.variable(name: "y", sort: .int)
+
+        // x >= 0, y >= 0, x + y == 3, 2x + y == 4 -> x = 1, y = 2
+        runner.expectEqual(lia.assertLiteral(.ge(x, .intConst(0))), .consistent)
+        runner.expectEqual(lia.assertLiteral(.ge(y, .intConst(0))), .consistent)
+        runner.expectEqual(lia.assertLiteral(.eq(.add([x, y]), .intConst(3))), .consistent)
+        runner.expectEqual(lia.assertLiteral(.eq(.add([.mul([.intConst(2), x]), y]), .intConst(4))), .consistent)
+
+        let res = lia.checkConsistency()
+        runner.expectEqual(res, .consistent)
+        runner.expectEqual(lia.integerVariableValue(x), BigInt(1))
+        runner.expectEqual(lia.integerVariableValue(y), BigInt(2))
+    }
+
+    runner.test("Continuous feasible but integer infeasible fractional gap") {
+        let lia = LIASolver()
+        let x = Expr.variable(name: "x", sort: .int)
+
+        // 2x == 1 -> x = 1/2 (continuous solution exists, but no integer solution)
+        let c = Expr.eq(.mul([.intConst(2), x]), .intConst(1))
+        _ = lia.assertLiteral(c)
+        let res = lia.checkConsistency()
+        runner.expectEqual(res, .conflict(explanation: [c]))
+    }
+
+    runner.test("Diophantine equation GCD infeasibility refutation") {
+        let lia = LIASolver()
+        let x = Expr.variable(name: "x", sort: .int)
+        let y = Expr.variable(name: "y", sort: .int)
+
+        // 4x + 6y == 5 (gcd(4, 6) = 2 does not divide 5)
+        let diophantineEq = Expr.eq(
+            .add([.mul([.intConst(4), x]), .mul([.intConst(6), y])]),
+            .intConst(5)
+        )
+        let res = lia.assertLiteral(diophantineEq)
+        if case let .conflict(explanation) = res {
+            runner.expectTrue(explanation.contains(diophantineEq))
+        } else {
+            runner.expectTrue(false, "Expected GCD conflict for 4x + 6y == 5")
+        }
+    }
+
+    runner.test("Branch-and-Bound fractional splitting") {
+        let lia = LIASolver()
+        let x = Expr.variable(name: "x", sort: .int)
+
+        // 10x <= 25 and x >= 3 (10 * 3 = 30 > 25 -> UNSAT)
+        let c1 = Expr.le(.mul([.intConst(10), x]), .intConst(25))
+        let c2 = Expr.ge(x, .intConst(3))
+
+        _ = lia.assertLiteral(c1)
+        _ = lia.assertLiteral(c2)
+        let res = lia.checkConsistency()
+        if case .conflict = res {
+            // Correctly detected conflict
+        } else {
+            runner.expectTrue(false, "Expected conflict for 10x <= 25 and x >= 3")
+        }
+    }
+}
+
 runner.reportAndExit()
