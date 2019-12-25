@@ -335,4 +335,21 @@ public final class EUFSolver: TheorySolver, @unchecked Sendable {
         }
         return find(idA) == find(idB)
     }
+
+    /// Check if two expressions are proven disequal in the current E-graph.
+    public func areDisequal(_ a: Expr, _ b: Expr) -> Bool {
+        guard let idA = termToNodeId[a], let idB = termToNodeId[b] else {
+            return false
+        }
+        let rootA = find(idA)
+        let rootB = find(idB)
+        for (da, db, _) in disequalities {
+            let rA = find(da)
+            let rB = find(db)
+            if (rA == rootA && rB == rootB) || (rA == rootB && rB == rootA) {
+                return true
+            }
+        }
+        return false
+    }
 }
