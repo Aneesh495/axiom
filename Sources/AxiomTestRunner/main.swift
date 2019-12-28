@@ -971,5 +971,130 @@ runner.suite("AxiomTheories QF_BV Bit-Vector AIG Bit-Blasting & Arithmetic") {
     }
 }
 
+runner.suite("AxiomTheories QF_AX McCarthy Arrays & Extensionality") {
+    runner.test("McCarthy ROW1 axiom: same-index read-over-write") {
+        let ax = ArraySolver()
+        let arrSort = Sort.array(index: .int, element: .int)
+        let a = Expr.variable(name: "a", sort: arrSort)
+        let i = Expr.variable(name: "i", sort: .int)
+        let v = Expr.variable(name: "v", sort: .int)
+
+        // a1 = store(a, i, v)
+        let a1 = Expr.store(array: a, index: i, value: v)
+        // select(a1, i)
+        let sel = Expr.select(array: a1, index: i)
+
+        // Assert not(select(store(a, i, v), i) == v) -> should be UNSAT!
+        let diseq = Expr.not(.eq(sel, v))
+        _ = ax.assertLiteral(diseq)
+
+        let res = ax.checkConsistency()
+        if case .conflict = res {
+            // Correctly proved ROW1 contradiction
+        } else {
+            runner.expectTrue(false, "Expected ROW1 conflict for select(store(a, i, v), i) != v")
+        }
+    }
+
+    runner.test("McCarthy ROW2 axiom: distinct-index read-over-write") {
+        let ax = ArraySolver()
+        let arrSort = Sort.array(index: .int, element: .int)
+        let a = Expr.variable(name: "a", sort: arrSort)
+        let i = Expr.variable(name: "i", sort: .int)
+        let j = Expr.variable(name: "j", sort: .int)
+        let v = Expr.variable(name: "v", sort: .int)
+
+        // i != j
+        _ = ax.assertLiteral(.not(.eq(i, j)))
+
+        // a1 = store(a, i, v)
+        let a1 = Expr.store(array: a, index: i, value: v)
+        let selA1 = Expr.select(array: a1, index: j)
+        let selA = Expr.select(array: a, index: j)
+
+        // Assert not(select(store(a, i, v), j) == select(a, j)) -> UNSAT!
+        let diseq = Expr.not(.eq(selA1, selA))
+        _ = ax.assertLiteral(diseq)
+
+        let res = ax.checkConsistency()
+        if case .conflict = res {
+            // Correctly proved ROW2 contradiction under i != j
+        } else {
+            runner.expectTrue(false, "Expected ROW2 conflict under i != j")
+        }
+    }
+
+    runner.test("Store chain overwriting at identical index") {
+        let ax = ArraySolver()
+        let arrSort = Sort.array(index: .int, element: .int)
+        let a = Expr.variable(name: "a", sort: arrSort)
+        let i = Expr.variable(name: "i", sort: .int)
+        let v1 = Expr.variable(name: "v1", sort: .int)
+        let v2 = Expr.variable(name: "v2", sort: .int)
+
+        // a1 = store(a, i, v1)
+        let a1 = Expr.store(array: a, index: i, value: v1)
+        // a2 = store(a1, i, v2)
+        let a2 = Expr.store(array: a1, index: i, value: v2)
+
+        let sel = Expr.select(array: a2, index: i)
+
+        // select(a2, i) == v2 should hold
+        _ = ax.assertLiteral(.not(.eq(sel, v2)))
+        let res = ax.checkConsistency()
+        if case .conflict = res {
+            // Overwrite correctly detected
+        } else {
+            runner.expectTrue(false, "Expected conflict when asserting select(store(store(a, i, v1), i, v2), i) != v2")
+        }
+    }
+
+    runner.test("Array extensionality refutation for distinct arrays") {
+        let ax = ArraySolver()
+        let arrSort = Sort.array(index: .int, element: .int)
+        let a = Expr.variable(name: "a", sort: arrSort)
+        let b = Expr.variable(name: "b", sort: arrSort)
+
+        // a != b and a == b -> immediate conflict
+        _ = ax.assertLiteral(.not(.eq(a, b)))
+        _ = ax.assertLiteral(.eq(a, b))
+
+        let res = ax.checkConsistency()
+        if case .conflict = res {
+            // Refuted contradictory array equality
+        } else {
+            runner.expectTrue(false, "Expected extensionality conflict for a != b and a == b")
+        }
+    }
+
+    runner.test("Incremental backtracking and scope restoration in Array solver") {
+        let ax = ArraySolver()
+        let arrSort = Sort.array(index: .int, element: .int)
+        let a = Expr.variable(name: "a", sort: arrSort)
+        let i = Expr.variable(name: "i", sort: .int)
+        let v = Expr.variable(name: "v", sort: .int)
+
+        let a1 = Expr.store(array: a, index: i, value: v)
+        let sel = Expr.select(array: a1, index: i)
+
+        ax.pushScope()
+        _ = ax.assertLiteral(.not(.eq(sel, v)))
+        let conflictRes = ax.checkConsistency()
+        if case .conflict = conflictRes {
+            // Expected
+        } else {
+            runner.expectTrue(false, "Expected conflict in scoped ROW assertion")
+        }
+
+        ax.popScope()
+
+        // Asserting positive equality should be consistent
+        _ = ax.assertLiteral(.eq(sel, v))
+        let consistentRes = ax.checkConsistency()
+        runner.expectEqual(consistentRes, .consistent)
+    }
+}
+
 runner.reportAndExit()
+
 
