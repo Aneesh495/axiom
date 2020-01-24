@@ -50,7 +50,7 @@ let package = Package(
         ),
         .target(
             name: "AxiomParser",
-            dependencies: ["AxiomCore", "AxiomAST"],
+            dependencies: ["AxiomCore", "AxiomAST", "AxiomSMT"],
             path: "Sources/AxiomParser"
         ),
         .target(
