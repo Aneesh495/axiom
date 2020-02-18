@@ -117,47 +117,69 @@ public final class SMTSolver: @unchecked Sendable {
 
     // MARK: - Assertion
 
+    private func flattenConjunctions(_ formulas: [Expr]) -> [Expr] {
+        var flat: [Expr] = []
+        for f in formulas {
+            if case let .and(children) = f {
+                flat.append(contentsOf: flattenConjunctions(children))
+            } else {
+                flat.append(f)
+            }
+        }
+        return flat
+    }
+
     @discardableResult
     public func assert(_ formula: Expr) -> SMTResult {
+        if case let .and(conjuncts) = formula {
+            for c in conjuncts {
+                _ = self.assert(c)
+            }
+            return .unknown
+        }
         assertedFormulas.append(formula)
         lastResult = .unknown
         cachedModel = nil
-
-        // If the formula is already known to be a simple theory literal, assert directly
-        let res = nelsonOppen.assertLiteral(formula)
-        if case .conflict = res {
-            lastResult = .unsat
-            return .unsat
-        }
-
         return .unknown
     }
 
     // MARK: - Solving Loop
 
     public func check(assumptions: [Expr] = []) -> SMTResult {
-        // 1. Initial quick Nelson-Oppen check
-        let noRes = nelsonOppen.checkConsistency()
-        if case .conflict = noRes {
-            lastResult = .unsat
-            return .unsat
-        }
-
-        // 2. If all formulas are purely ground theory literals, Nelson-Oppen is complete
-        if isPureTheoryConjunction() {
+        let allFormulas = flattenConjunctions(assertedFormulas + assumptions)
+        guard !allFormulas.isEmpty else {
             lastResult = .sat
             synthesizeModel()
             return .sat
         }
 
-        // 3. Full CDCL(T) Lazy Loop
-        // Abstract non-boolean theory atoms into propositional literals
-        var cnfClauses: [[Literal]] = []
-        for formula in assertedFormulas + assumptions {
-            let cnf = abstractToPropositional(formula)
-            cnfClauses.append(contentsOf: cnf)
+        // 1. If all formulas are purely ground theory literals, Nelson-Oppen is complete
+        if isPureTheoryConjunction(formulas: allFormulas) {
+            nelsonOppen.pushScope()
+            for f in allFormulas {
+                let res = nelsonOppen.assertLiteral(f)
+                if case .conflict = res {
+                    nelsonOppen.popScope()
+                    lastResult = .unsat
+                    return .unsat
+                }
+            }
+
+            let noRes = nelsonOppen.checkConsistency()
+            if case .conflict = noRes {
+                nelsonOppen.popScope()
+                lastResult = .unsat
+                return .unsat
+            }
+
+            lastResult = .sat
+            synthesizeModel()
+            nelsonOppen.popScope()
+            return .sat
         }
 
+        // 2. Full CDCL(T) Lazy Loop
+        let cnfClauses = setupPropositionalAbstraction(formulas: allFormulas)
         satSolver = SATSolver()
         for clause in cnfClauses {
             satSolver.addClause(clause)
@@ -201,16 +223,17 @@ public final class SMTSolver: @unchecked Sendable {
                 }
 
                 if !conflictOccurred {
-                    // Satisfiable!
+                    // Consistent with all theories: satisfiable!
                     nelsonOppen.popScope()
                     lastResult = .sat
                     synthesizeModel()
                     return .sat
                 }
 
-                // Theory conflict detected: synthesize lazy theory lemma clause
+                // Theory conflict detected: backtrack SAT solver to root, learn lemma clause
                 nelsonOppen.popScope()
                 let lemmaClause = synthesizeTheoryLemma(explanation: conflictExplanation)
+                satSolver.backtrackToRoot()
                 satSolver.addClause(lemmaClause)
             }
         }
@@ -235,13 +258,34 @@ public final class SMTSolver: @unchecked Sendable {
 
     // MARK: - Helpers
 
-    private func isPureTheoryConjunction() -> Bool {
-        for f in assertedFormulas {
-            switch f {
-            case .and, .or, .implies, .xor, .iff:
+    private func isTheoryAtom(_ expr: Expr) -> Bool {
+        switch expr {
+        case .boolConst, .and, .or, .not, .implies, .iff, .xor, .ite:
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func isPureTheoryLiteral(_ expr: Expr) -> Bool {
+        switch expr {
+        case .eq, .distinct, .le, .lt, .ge, .gt, .bvULt, .bvULe, .bvSLt, .bvSLe, .apply:
+            return true
+        case let .not(inner):
+            return isPureTheoryLiteral(inner)
+        case let .variable(_, sort):
+            return sort == .bool
+        case .boolConst:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isPureTheoryConjunction(formulas: [Expr]) -> Bool {
+        for f in formulas {
+            if !isPureTheoryLiteral(f) {
                 return false
-            default:
-                break
             }
         }
         return true
@@ -272,39 +316,42 @@ public final class SMTSolver: @unchecked Sendable {
         }
     }
 
-    private func abstractToPropositional(_ expr: Expr) -> [[Literal]] {
-        // If it's a pure boolean connective formula, Tseitin transform directly
-        switch expr {
-        case .and, .or, .not, .implies, .iff, .xor:
-            let cnf = tseitin.transform(expr)
-            return cnf.clauses.map { clause in
-                clause.map { Literal(dimacs: $0) }
+    private func setupPropositionalAbstraction(formulas: [Expr]) -> [[Literal]] {
+        atomToPropVar.removeAll(keepingCapacity: true)
+        propVarToAtom.removeAll(keepingCapacity: true)
+        nextPropVar = 1
+
+        let rootExpr: Expr
+        if formulas.isEmpty {
+            rootExpr = .boolConst(true)
+        } else if formulas.count == 1 {
+            rootExpr = formulas[0]
+        } else {
+            rootExpr = .and(formulas)
+        }
+
+        let cnf = tseitin.transform(rootExpr)
+
+        for (atomExpr, varId) in cnf.exprToVar {
+            if isTheoryAtom(atomExpr) {
+                let satVar = varId - 1 // 0-based SAT variable index
+                atomToPropVar[atomExpr] = satVar
+                propVarToAtom[satVar] = atomExpr
             }
-
-        default:
-            // Theory atom: map to a single boolean variable
-            let v = getPropVar(for: expr)
-            return [[Literal(variable: v, isNegated: false)]]
         }
-    }
 
-    private func getPropVar(for atom: Expr) -> Int32 {
-        if let existing = atomToPropVar[atom] {
-            return existing
+        return cnf.clauses.map { clause in
+            clause.map { Literal(dimacs: $0) }
         }
-        let v = nextPropVar
-        nextPropVar += 1
-        atomToPropVar[atom] = v
-        propVarToAtom[v] = atom
-        return v
     }
 
     private func extractActiveTheoryLiterals() -> [Expr] {
         var active: [Expr] = []
         for (atom, propVar) in atomToPropVar {
-            if satSolver.modelValue(for: propVar) {
+            let val = satSolver.trail.value(of: propVar)
+            if val == .true {
                 active.append(atom)
-            } else {
+            } else if val == .false {
                 active.append(Expr.not(atom))
             }
         }
@@ -324,10 +371,22 @@ public final class SMTSolver: @unchecked Sendable {
                 baseAtom = exp
             }
 
-            let propVar = getPropVar(for: baseAtom)
-            // Theory conflict says: (l1 and l2) -> false, so clause is (~l1 or ~l2)
-            lemmaLits.append(Literal(variable: propVar, isNegated: !isNeg))
+            if let propVar = atomToPropVar[baseAtom] {
+                lemmaLits.append(Literal(variable: propVar, isNegated: !isNeg))
+            }
         }
-        return lemmaLits.isEmpty ? [Literal(variable: 0, isNegated: true), Literal(variable: 0, isNegated: false)] : lemmaLits
+
+        if lemmaLits.isEmpty {
+            for (_, propVar) in atomToPropVar {
+                let val = satSolver.trail.value(of: propVar)
+                if val == .true {
+                    lemmaLits.append(Literal(variable: propVar, isNegated: true))
+                } else if val == .false {
+                    lemmaLits.append(Literal(variable: propVar, isNegated: false))
+                }
+            }
+        }
+
+        return lemmaLits
     }
 }

@@ -140,27 +140,37 @@ public final class Purifier: @unchecked Sendable {
         }
     }
 
-    public func determineTheory(_ expr: Expr) -> TheoryId? {
+    public func determineTheories(_ expr: Expr) -> [TheoryId] {
         switch expr {
         case .apply:
-            return .euf
-        case .add, .sub, .mul, .div, .mod, .le, .lt, .ge, .gt, .neg:
-            if expr.sort.isReal { return .lra }
-            return .lia
+            return [.euf]
+        case .add, .sub, .mul, .div, .mod, .neg:
+            return expr.sort.isReal ? [.lra] : [.lia]
+        case let .le(lhs, _), let .lt(lhs, _), let .ge(lhs, _), let .gt(lhs, _):
+            return lhs.sort.isReal ? [.lra] : [.lia]
         case .bvAdd, .bvSub, .bvMul, .bvUDiv, .bvSDiv, .bvURem, .bvSRem,
              .bvAnd, .bvOr, .bvXor, .bvNot, .bvShl, .bvLShr, .bvAShr,
              .bvConcat, .bvExtract, .bvSignExtend, .bvZeroExtend,
              .bvULt, .bvULe, .bvSLt, .bvSLe:
-            return .bitvector
+            return [.bitvector]
         case .select, .store, .constArray:
-            return .arrays
+            return [.arrays]
         case let .eq(lhs, _):
-            return determineTheory(lhs) ?? .euf
+            var tids: [TheoryId] = [.euf]
+            if lhs.sort.isInteger { tids.append(.lia) }
+            else if lhs.sort.isReal { tids.append(.lra) }
+            else if lhs.sort.isBitVector { tids.append(.bitvector) }
+            else if lhs.sort.isArray { tids.append(.arrays) }
+            return tids
         case let .not(child):
-            return determineTheory(child)
+            return determineTheories(child)
         default:
-            return nil
+            return [.euf]
         }
+    }
+
+    public func determineTheory(_ expr: Expr) -> TheoryId? {
+        return determineTheories(expr).first
     }
 }
 
@@ -221,12 +231,13 @@ public final class NelsonOppenEngine: @unchecked Sendable {
         let allLiteralsToAssert = [purifiedLit] + defs
 
         for lit in allLiteralsToAssert {
-            let tid = purifier.determineTheory(lit) ?? .euf
-            guard let solver = solvers[tid] else { continue }
-
-            let res = solver.assertLiteral(lit)
-            if case let .conflict(explanation) = res {
-                return .conflict(explanation: explanation)
+            let tids = purifier.determineTheories(lit)
+            for tid in tids {
+                guard let solver = solvers[tid] else { continue }
+                let res = solver.assertLiteral(lit)
+                if case let .conflict(explanation) = res {
+                    return .conflict(explanation: explanation)
+                }
             }
         }
 
@@ -261,11 +272,21 @@ public final class NelsonOppenEngine: @unchecked Sendable {
                         deducedEqualities.insert(deduction.literal)
                         changed = true
 
-                        // Broadcast to peer theory solvers
-                        for (peerTid, peerSolver) in solvers where peerTid != tid {
+                        // In Nelson-Oppen equality sharing, only broadcast equalities over shared interface terms
+                        if case let .eq(lhs, rhs) = deduction.literal {
+                            guard sharedVariables.contains(lhs) && sharedVariables.contains(rhs) else {
+                                continue
+                            }
+                        }
+
+                        // Broadcast to peer theory solvers that support this sort
+                        let targetTheories = purifier.determineTheories(deduction.literal)
+                        for targetTid in targetTheories where targetTid != tid {
+                            guard let peerSolver = solvers[targetTid] else { continue }
                             let res = peerSolver.assertLiteral(deduction.literal)
                             if case let .conflict(explanation) = res {
-                                return .conflict(explanation: explanation + deduction.explanation)
+                                let filtered = explanation.filter { $0 != deduction.literal }
+                                return .conflict(explanation: filtered + deduction.explanation)
                             }
                         }
                     }

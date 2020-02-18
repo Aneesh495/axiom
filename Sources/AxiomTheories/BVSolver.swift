@@ -396,6 +396,9 @@ public final class BVSolver: TheorySolver, @unchecked Sendable {
     }
 
     private func bitBlastEquality(_ lhs: Expr, _ rhs: Expr) -> AIGLit {
+        guard lhs.sort.isBitVector && rhs.sort.isBitVector else {
+            return AIGLit.true
+        }
         let bitsLhs = bitBlastBVExpr(lhs)
         let bitsRhs = bitBlastBVExpr(rhs)
         precondition(bitsLhs.count == bitsRhs.count, "Bit width mismatch in equality bit-blasting")

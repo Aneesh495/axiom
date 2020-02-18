@@ -397,29 +397,37 @@ public struct FarkasCertificate: Sendable {
         let oldUpper = upperBounds[variable]
 
         if isLower {
-            if let current = oldLower, bound.value <= current.value {
-                return .consistent // Weaker than current bound
+            if let current = oldLower {
+                if bound.value < current.value || (bound.value == current.value && (!bound.isStrict || current.isStrict)) {
+                    return .consistent // Weaker than current bound
+                }
             }
-            if let currentUb = oldUpper, bound.value > currentUb.value {
-                // Immediate bound clash
-                let expl = [bound.reason, currentUb.reason]
-                isConflicted = true
-                conflictExplanation = expl
-                conflictScopeLevel = scopeLimits.count
-                return .conflict(explanation: expl)
+            if let currentUb = oldUpper {
+                let clash = (bound.value > currentUb.value) || (bound.value == currentUb.value && (bound.isStrict || currentUb.isStrict))
+                if clash {
+                    let expl = [bound.reason, currentUb.reason]
+                    isConflicted = true
+                    conflictExplanation = expl
+                    conflictScopeLevel = scopeLimits.count
+                    return .conflict(explanation: expl)
+                }
             }
             lowerBounds[variable] = bound
         } else {
-            if let current = oldUpper, bound.value >= current.value {
-                return .consistent
+            if let current = oldUpper {
+                if bound.value > current.value || (bound.value == current.value && (!bound.isStrict || current.isStrict)) {
+                    return .consistent // Weaker than current bound
+                }
             }
-            if let currentLb = oldLower, bound.value < currentLb.value {
-                // Immediate bound clash
-                let expl = [bound.reason, currentLb.reason]
-                isConflicted = true
-                conflictExplanation = expl
-                conflictScopeLevel = scopeLimits.count
-                return .conflict(explanation: expl)
+            if let currentLb = oldLower {
+                let clash = (bound.value < currentLb.value) || (bound.value == currentLb.value && (bound.isStrict || currentLb.isStrict))
+                if clash {
+                    let expl = [bound.reason, currentLb.reason]
+                    isConflicted = true
+                    conflictExplanation = expl
+                    conflictScopeLevel = scopeLimits.count
+                    return .conflict(explanation: expl)
+                }
             }
             upperBounds[variable] = bound
         }
@@ -486,31 +494,48 @@ public struct FarkasCertificate: Sendable {
     }
 
     public func assertLiteral(_ literal: Expr) -> TheoryResult {
-        assertedConstraints.append(literal)
+        return assertLiteral(literal, originalExpr: literal)
+    }
+
+    public func assertLiteral(_ literal: Expr, originalExpr: Expr) -> TheoryResult {
+        assertedConstraints.append(originalExpr)
 
         // Parse linear constraint: e.g. x <= 5, x >= 0, x - y <= 2, x == y
         switch literal {
         case let .le(lhs, rhs):
-            return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: false, originalExpr: literal)
+            return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: false, originalExpr: originalExpr)
         case let .lt(lhs, rhs):
-            return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: false, originalExpr: literal)
+            return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: false, originalExpr: originalExpr)
         case let .ge(lhs, rhs):
-            return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: true, originalExpr: literal)
+            return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: true, originalExpr: originalExpr)
         case let .gt(lhs, rhs):
-            return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: true, originalExpr: literal)
+            return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: true, originalExpr: originalExpr)
         case let .eq(lhs, rhs):
-            return assertEquality(lhs: lhs, rhs: rhs, originalExpr: literal)
+            return assertEquality(lhs: lhs, rhs: rhs, originalExpr: originalExpr)
         case let .not(inner):
             // Invert condition
             switch inner {
             case let .le(lhs, rhs):
-                return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: true, originalExpr: literal)
+                return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: true, originalExpr: originalExpr)
             case let .lt(lhs, rhs):
-                return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: true, originalExpr: literal)
+                return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: true, originalExpr: originalExpr)
             case let .ge(lhs, rhs):
-                return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: false, originalExpr: literal)
+                return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: false, originalExpr: originalExpr)
             case let .gt(lhs, rhs):
-                return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: false, originalExpr: literal)
+                return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: false, originalExpr: originalExpr)
+            case let .eq(lhs, rhs):
+                var poly = toPolynomial(expr: lhs) - toPolynomial(expr: rhs)
+                if let minVar = poly.terms.keys.min(), let leadingCoeff = poly.terms[minVar], leadingCoeff < .zero {
+                    poly = poly * Rational(-1)
+                }
+                for bVar in basicVars {
+                    if let row = tableau[bVar], row == poly.terms {
+                        if let lb = lowerBounds[bVar], let ub = upperBounds[bVar], lb.value == ub.value, lb.value == -poly.constant {
+                            return .conflict(explanation: [originalExpr, lb.reason, ub.reason])
+                        }
+                    }
+                }
+                return .consistent
             default:
                 return .consistent
             }
@@ -520,7 +545,7 @@ public struct FarkasCertificate: Sendable {
     }
 
     private func assertEquality(lhs: Expr, rhs: Expr, originalExpr: Expr) -> TheoryResult {
-        let poly = toPolynomial(expr: lhs) - toPolynomial(expr: rhs)
+        var poly = toPolynomial(expr: lhs) - toPolynomial(expr: rhs)
 
         if poly.terms.isEmpty {
             if poly.constant.isZero {
@@ -528,6 +553,10 @@ public struct FarkasCertificate: Sendable {
             } else {
                 return .conflict(explanation: [originalExpr])
             }
+        }
+
+        if let minVar = poly.terms.keys.min(), let leadingCoeff = poly.terms[minVar], leadingCoeff < .zero {
+            poly = poly * Rational(-1)
         }
 
         if poly.terms.count == 1, let (v, coeff) = poly.terms.first {
@@ -538,9 +567,22 @@ public struct FarkasCertificate: Sendable {
             return setBound(variable: v, bound: bInfo, isLower: false)
         }
 
-        let slackExpr = Expr.variable(name: Symbol("slack_\(varCount)"), sort: .real)
-        let s = registerVariable(slackExpr)
-        addRow(basicVar: s, terms: poly.terms)
+        var slackVar: Int? = nil
+        for bVar in basicVars {
+            if let row = tableau[bVar], row == poly.terms {
+                slackVar = bVar
+                break
+            }
+        }
+
+        let s: Int
+        if let existing = slackVar {
+            s = existing
+        } else {
+            let slackExpr = Expr.variable(name: Symbol("slack_\(varCount)"), sort: .real)
+            s = registerVariable(slackExpr)
+            addRow(basicVar: s, terms: poly.terms)
+        }
 
         let boundVal = -poly.constant
         let bInfo = BoundInfo(value: boundVal, reason: originalExpr, isStrict: false)
@@ -557,35 +599,54 @@ public struct FarkasCertificate: Sendable {
         originalExpr: Expr
     ) -> TheoryResult {
         // Form: poly <= constant or poly >= constant
-        let poly = toPolynomial(expr: lhs) - toPolynomial(expr: rhs)
+        var poly = toPolynomial(expr: lhs) - toPolynomial(expr: rhs)
+        var effectiveStrict = isStrict
+        var effectiveGreater = isGreater
 
         if poly.terms.isEmpty {
             // Constant inequality: e.g. 0 <= 5
-            let isSatisfied = isGreater
-                ? (isStrict ? -poly.constant > .zero : -poly.constant >= .zero)
-                : (isStrict ? poly.constant < .zero : poly.constant <= .zero)
+            let isSatisfied = effectiveGreater
+                ? (effectiveStrict ? -poly.constant > .zero : -poly.constant >= .zero)
+                : (effectiveStrict ? poly.constant < .zero : poly.constant <= .zero)
             if !isSatisfied {
                 return .conflict(explanation: [originalExpr])
             }
             return .consistent
         }
 
+        if let minVar = poly.terms.keys.min(), let leadingCoeff = poly.terms[minVar], leadingCoeff < .zero {
+            poly = poly * Rational(-1)
+            effectiveGreater = !effectiveGreater
+        }
+
         if poly.terms.count == 1, let (v, coeff) = poly.terms.first {
             // Single variable bound: coeff * x + c <= 0 <=> coeff * x <= -c
             let boundVal = -poly.constant / coeff
-            let isLower = (coeff > .zero && isGreater) || (coeff < .zero && !isGreater)
-            let boundInfo = BoundInfo(value: boundVal, reason: originalExpr, isStrict: isStrict)
+            let isLower = (coeff > .zero && effectiveGreater) || (coeff < .zero && !effectiveGreater)
+            let boundInfo = BoundInfo(value: boundVal, reason: originalExpr, isStrict: effectiveStrict)
             return setBound(variable: v, bound: boundInfo, isLower: isLower)
         }
 
-        // Multi-variable: introduce auxiliary slack variable s = sum(coeff * x)
-        let slackExpr = Expr.variable(name: Symbol("slack_\(varCount)"), sort: .real)
-        let s = registerVariable(slackExpr)
-        addRow(basicVar: s, terms: poly.terms)
+        var slackVar: Int? = nil
+        for bVar in basicVars {
+            if let row = tableau[bVar], row == poly.terms {
+                slackVar = bVar
+                break
+            }
+        }
+
+        let s: Int
+        if let existing = slackVar {
+            s = existing
+        } else {
+            let slackExpr = Expr.variable(name: Symbol("slack_\(varCount)"), sort: .real)
+            s = registerVariable(slackExpr)
+            addRow(basicVar: s, terms: poly.terms)
+        }
 
         let boundVal = -poly.constant
-        let boundInfo = BoundInfo(value: boundVal, reason: originalExpr, isStrict: isStrict)
-        return setBound(variable: s, bound: boundInfo, isLower: isGreater)
+        let boundInfo = BoundInfo(value: boundVal, reason: originalExpr, isStrict: effectiveStrict)
+        return setBound(variable: s, bound: boundInfo, isLower: effectiveGreater)
     }
 
     private func toPolynomial(expr: Expr) -> LinearPolynomial {
@@ -710,6 +771,16 @@ public struct FarkasCertificate: Sendable {
                 let fixedVal = lb.value
                 let eqExpr = Expr.eq(bExpr, .realConst(fixedVal))
                 deductions.append(TheoryDeduction(literal: eqExpr, explanation: [lb.reason, ub.reason]))
+
+                if fixedVal.isZero, let row = tableau[bVar], row.count == 2 {
+                    let sortedTerms = row.sorted { $0.key < $1.key }
+                    let (v1, c1) = sortedTerms[0]
+                    let (v2, c2) = sortedTerms[1]
+                    if c1 == -c2, let e1 = varToExpr[v1], let e2 = varToExpr[v2] {
+                        let varEq = Expr.eq(e1, e2)
+                        deductions.append(TheoryDeduction(literal: varEq, explanation: [lb.reason, ub.reason]))
+                    }
+                }
             }
         }
 

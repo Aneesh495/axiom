@@ -3,6 +3,9 @@ import AxiomCore
 import AxiomAST
 import AxiomSAT
 import AxiomTheories
+import AxiomSMT
+import AxiomParser
+import AxiomVerify
 
 let runner = TestHarness.shared
 
@@ -1095,6 +1098,235 @@ runner.suite("AxiomTheories QF_AX McCarthy Arrays & Extensionality") {
     }
 }
 
+runner.suite("AxiomSMT & AxiomParser End-to-End Decision Engine") {
+    runner.test("SMT-LIB 2.6 script parsing and execution") {
+        let env = SMTLIBEnvironment()
+        let script = """
+        (set-logic QF_LRA)
+        (declare-const x Real)
+        (declare-const y Real)
+        (assert (>= x 10.0))
+        (assert (<= y 5.0))
+        (assert (>= (+ x y) 15.0))
+        (check-sat)
+        (get-model)
+        """
+        do {
+            let outputs = try env.execute(script: script)
+            runner.expectTrue(outputs.contains("sat"))
+        } catch {
+            runner.expectTrue(false, "SMT-LIB execution failed: \(error)")
+        }
+    }
+
+    runner.test("Unsat Core extraction and minimality") {
+        let extractor = UnsatCoreExtractor()
+        let x = Expr.variable(name: "x", sort: .int)
+        let c1 = Expr.gt(x, .intConst(10))
+        let c2 = Expr.lt(x, .intConst(5))
+        let c3 = Expr.gt(x, .intConst(0)) // Redundant constraint
+
+        let core = extractor.extractUnsatCore(from: [c1, c2, c3], minimize: true)
+        if let core = core {
+            runner.expectTrue(core.isMinimal)
+            runner.expectEqual(core.expressions.count, 2)
+            runner.expectTrue(core.expressions.contains(c1))
+            runner.expectTrue(core.expressions.contains(c2))
+            runner.expectFalse(core.expressions.contains(c3))
+        } else {
+            runner.expectTrue(false, "Expected minimal unsat core")
+        }
+    }
+
+    runner.test("Craig Interpolation inductive barrier generation") {
+        let interpolator = CraigInterpolator()
+        let x = Expr.variable(name: "x", sort: .real)
+        let a = Expr.le(x, .realConst(Rational(5)))
+        let b = Expr.ge(x, .realConst(Rational(10)))
+
+        let result = interpolator.interpolate(aFormula: a, bFormula: b)
+        runner.expectTrue(result != nil)
+        if let ip = result {
+            runner.expectTrue(ip.sharedSymbols.contains(Symbol("x")))
+        }
+    }
+}
+
+runner.suite("AxiomVerify Program Verification & Model Checking") {
+    runner.test("Dijkstra VCGen: Euclidean subtraction GCD verification") {
+        let vcgen = VCGen()
+        let a = Symbol("a")
+        let b = Symbol("b")
+        let x = Symbol("x")
+        let y = Symbol("y")
+        let res = Symbol("res")
+
+        let aVar = Expr.variable(name: a, sort: .int)
+        let bVar = Expr.variable(name: b, sort: .int)
+        let xVar = Expr.variable(name: x, sort: .int)
+        let yVar = Expr.variable(name: y, sort: .int)
+        let resVar = Expr.variable(name: res, sort: .int)
+
+        let body = Stmt.seq([
+            .assign(variable: x, value: aVar),
+            .assign(variable: y, value: bVar),
+            .whileLoop(
+                condition: .not(.eq(xVar, yVar)),
+                invariant: .and([.gt(xVar, .intConst(0)), .gt(yVar, .intConst(0))]),
+                body: .ifThenElse(
+                    condition: .gt(xVar, yVar),
+                    thenBranch: .assign(variable: x, value: .sub(xVar, yVar)),
+                    elseBranch: .assign(variable: y, value: .sub(yVar, xVar))
+                )
+            ),
+            .assign(variable: res, value: xVar)
+        ])
+
+        let proc = Procedure(
+            name: Symbol("gcd"),
+            parameters: [(name: a, sort: .int), (name: b, sort: .int)],
+            returnSort: .int,
+            requires: [.gt(aVar, .intConst(0)), .gt(bVar, .intConst(0))],
+            ensures: [.gt(resVar, .intConst(0))],
+            modifies: [x, y, res],
+            body: body
+        )
+
+        let verifyRes = vcgen.verify(procedure: proc)
+        if case let .verified(count) = verifyRes {
+            runner.expectTrue(count >= 1)
+        } else {
+            runner.expectTrue(false, "Expected GCD procedure to verify, got: \(verifyRes)")
+        }
+    }
+
+    runner.test("Dijkstra VCGen: Counterexample generation for buggy swap") {
+        let vcgen = VCGen()
+        let x = Symbol("x")
+        let y = Symbol("y")
+        let t = Symbol("t")
+
+        let xVar = Expr.variable(name: x, sort: .int)
+        let yVar = Expr.variable(name: y, sort: .int)
+
+        // Buggy swap: t := x; x := y; y := x (should be y := t)
+        let buggyBody = Stmt.seq([
+            .assign(variable: t, value: xVar),
+            .assign(variable: x, value: yVar),
+            .assign(variable: y, value: xVar)
+        ])
+
+        let proc = Procedure(
+            name: Symbol("buggySwap"),
+            parameters: [(name: x, sort: .int), (name: y, sort: .int)],
+            returnSort: nil,
+            requires: [.eq(xVar, .intConst(1)), .eq(yVar, .intConst(2))],
+            ensures: [.eq(xVar, .intConst(2)), .eq(yVar, .intConst(1))],
+            modifies: [x, y, t],
+            body: buggyBody
+        )
+
+        let verifyRes = vcgen.verify(procedure: proc)
+        if case .counterexample = verifyRes {
+            // Correctly caught bug!
+        } else {
+            runner.expectTrue(false, "Expected counterexample for buggy swap, got: \(verifyRes)")
+        }
+    }
+
+    runner.test("Bounded Model Checking: Loop unwinding and assertion safety") {
+        let bmc = BMC()
+        let i = Symbol("i")
+        let sum = Symbol("sum")
+
+        let iVar = Expr.variable(name: i, sort: .int)
+        let sumVar = Expr.variable(name: sum, sort: .int)
+
+        // sum := 0; i := 0; while (i < 2) { sum := sum + 1; i := i + 1; }; assert(sum <= 2)
+        let body = Stmt.seq([
+            .assign(variable: sum, value: .intConst(0)),
+            .assign(variable: i, value: .intConst(0)),
+            .whileLoop(
+                condition: .lt(iVar, .intConst(2)),
+                invariant: nil,
+                body: .seq([
+                    .assign(variable: sum, value: .add([sumVar, .intConst(1)])),
+                    .assign(variable: i, value: .add([iVar, .intConst(1)]))
+                ])
+            ),
+            .assert(condition: .le(sumVar, .intConst(2)), message: "sum bound check")
+        ])
+
+        let proc = Procedure(
+            name: Symbol("boundedLoop"),
+            requires: [],
+            ensures: [.le(sumVar, .intConst(2))],
+            modifies: [i, sum],
+            body: body
+        )
+
+        let res = bmc.check(procedure: proc, bound: 2)
+        if case .safe = res {
+            // Safe within bound!
+        } else {
+            runner.expectTrue(false, "Expected BMC to verify safety, got: \(res)")
+        }
+    }
+
+    runner.test("Houdini loop invariant candidate synthesis") {
+        let houdini = HoudiniSynthesizer()
+        let i = Symbol("i")
+        let iVar = Expr.variable(name: i, sort: .int)
+
+        let loopBody = Stmt.assign(variable: i, value: .add([iVar, .intConst(1)]))
+        let loopCond = Expr.lt(iVar, .intConst(10))
+        let pre = Expr.eq(iVar, .intConst(0))
+
+        let pool = [
+            Expr.ge(iVar, .intConst(0)),
+            Expr.le(iVar, .intConst(10)),
+            Expr.eq(iVar, .intConst(0)), // Not inductive across body!
+            Expr.eq(iVar, .intConst(5))  // Refuted initially!
+        ]
+
+        let invariant = houdini.synthesize(
+            precondition: pre,
+            loopCondition: loopCond,
+            loopBody: loopBody,
+            candidatePool: pool
+        )
+
+        runner.expectTrue(invariant != nil)
+        if let inv = invariant {
+            // Inductive invariant must retain i >= 0 in SMT-LIB prefix (>= i 0)
+            runner.expectTrue(inv.description.contains(">="))
+        }
+    }
+
+    runner.test("Owicki-Gries concurrent program safety and mutual exclusion") {
+        let verifier = ConcurrencyVerifier()
+
+        // Test Peterson-style mutual exclusion invariant:
+        // Thread 1 in critical section: crit1 == 1
+        // Thread 2 in critical section: crit2 == 1
+        // Global invariant: not(crit1 == 1 and crit2 == 1)
+        let crit1 = Expr.variable(name: "crit1", sort: .int)
+        let crit2 = Expr.variable(name: "crit2", sort: .int)
+
+        let t1Critical = Expr.eq(crit1, .intConst(1))
+        let t2Critical = Expr.eq(crit2, .intConst(1))
+        let globalInv = Expr.not(.and([t1Critical, t2Critical]))
+
+        let mutexVerified = verifier.verifyMutualExclusion(
+            thread1Critical: t1Critical,
+            thread2Critical: t2Critical,
+            globalInvariant: globalInv
+        )
+        runner.expectTrue(mutexVerified)
+    }
+}
+
 runner.reportAndExit()
+
 
 

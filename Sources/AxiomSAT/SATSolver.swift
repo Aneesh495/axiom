@@ -129,6 +129,14 @@ public final class SATSolver: @unchecked Sendable {
         return true
     }
 
+    public func backtrackToRoot() {
+        let unassigned = trail.backtrack(toLevel: 0)
+        for v in unassigned {
+            vsids.insertVariable(v)
+        }
+        propHead = trail.trail.count
+    }
+
     // MARK: - Two-Watched-Literal Boolean Constant Propagation (BCP)
 
     public func propagate() -> Int? {
@@ -238,7 +246,10 @@ public final class SATSolver: @unchecked Sendable {
                 )
 
                 // Backtrack
-                trail.backtrack(toLevel: conflict.backtrackLevel)
+                let unassigned = trail.backtrack(toLevel: conflict.backtrackLevel)
+                for v in unassigned {
+                    vsids.insertVariable(v)
+                }
                 propHead = trail.trail.count
                 assumptionIdx = Swift.min(assumptionIdx, Int(conflict.backtrackLevel))
 
@@ -279,7 +290,10 @@ public final class SATSolver: @unchecked Sendable {
                 if restartManager.recordConflict(lbd: conflict.lbd) {
                     stats.restarts += 1
                     let targetLevel = Int32(Swift.min(assumptionIdx, assumptions.count))
-                    trail.backtrack(toLevel: targetLevel)
+                    let restartUnassigned = trail.backtrack(toLevel: targetLevel)
+                    for v in restartUnassigned {
+                        vsids.insertVariable(v)
+                    }
                     propHead = trail.trail.count
                 }
 
