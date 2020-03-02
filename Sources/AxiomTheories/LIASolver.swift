@@ -222,6 +222,37 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
             return .conflict(explanation: constraints)
         }
 
+        // 3. Check integer disequalities
+        for (lhs, rhs, deqReason) in disequalities {
+            if let lVal = evaluateTerm(lhs), let rVal = evaluateTerm(rhs), lVal == rVal {
+                // Polyhedral check: test if lhs <= rhs - 1 or lhs >= rhs + 1 is feasible
+                pushScope()
+                let leftRes = simplex.assertLiteral(Expr.le(lhs, .sub(rhs, .intConst(1))))
+                let leftFeasible: Bool
+                if case .consistent = leftRes {
+                    leftFeasible = true
+                } else {
+                    leftFeasible = false
+                }
+                popScope()
+
+                pushScope()
+                let rightRes = simplex.assertLiteral(Expr.ge(lhs, .add([rhs, .intConst(1)])))
+                let rightFeasible: Bool
+                if case .consistent = rightRes {
+                    rightFeasible = true
+                } else {
+                    rightFeasible = false
+                }
+                popScope()
+
+                if !leftFeasible && !rightFeasible {
+                    // Contradiction: the polytope strictly forces lhs == rhs
+                    return .conflict(explanation: [deqReason])
+                }
+            }
+        }
+
         return .consistent
     }
 

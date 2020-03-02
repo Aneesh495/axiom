@@ -153,6 +153,11 @@ public final class SMTSolver: @unchecked Sendable {
             return .sat
         }
 
+        if allFormulas.contains(.boolConst(false)) {
+            lastResult = .unsat
+            return .unsat
+        }
+
         // 1. If all formulas are purely ground theory literals, Nelson-Oppen is complete
         if isPureTheoryConjunction(formulas: allFormulas) {
             nelsonOppen.pushScope()
