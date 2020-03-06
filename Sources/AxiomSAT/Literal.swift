@@ -52,6 +52,7 @@ public struct Literal: Hashable, Equatable, Comparable, CustomStringConvertible,
     }
 
     public var toDimacs: Int32 {
+        guard variable >= 0 && variable < (Int32.max - 1) else { return 0 }
         let v = variable + 1
         return isNegative ? -v : v
     }

@@ -239,7 +239,10 @@ public final class SMTSolver: @unchecked Sendable {
                 nelsonOppen.popScope()
                 let lemmaClause = synthesizeTheoryLemma(explanation: conflictExplanation)
                 satSolver.backtrackToRoot()
-                satSolver.addClause(lemmaClause)
+                if !satSolver.addClause(lemmaClause) {
+                    lastResult = .unsat
+                    return .unsat
+                }
             }
         }
     }
