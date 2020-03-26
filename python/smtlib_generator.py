@@ -101,7 +101,7 @@ class SMTLIBGenerator:
             op = self.rng.choice(["bvadd", "bvsub", "bvand", "bvor", "bvxor"])
             comp = self.rng.choice(["=", "bvult", "bvule", "bvslt", "bvsle"])
             const_val = self.rng.randint(0, (1 << bitwidth) - 1)
-            hex_val = f"#x{const_val:0{bitwidth // 4}x}" if bitwidth >= 4 else f"(_ bv{const_val} {bitwidth})"
+            hex_val = f"#x{const_val:0{bitwidth // 4}x}" if bitwidth >= 4 and bitwidth % 4 == 0 else f"(_ bv{const_val} {bitwidth})"
 
             expr = f"({op} {v1} {v2})"
             lines.append(f"(assert ({comp} {expr} {hex_val}))")
