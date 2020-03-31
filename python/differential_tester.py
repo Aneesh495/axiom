@@ -15,6 +15,15 @@ from typing import Optional, Tuple
 from smtlib_generator import SMTLIBGenerator
 
 
+def solver_status(result):
+    """Read one successful SMT-LIB check-sat response, not a diagnostic substring."""
+    if result.returncode != 0:
+        return None
+    answers = [line.strip().lower() for line in result.stdout.splitlines()
+               if line.strip().lower() in {"sat", "unsat", "unknown"}]
+    return answers[0] if len(answers) == 1 else None
+
+
 class DifferentialTester:
     """Orchestrates cross-solver differential testing and fuzzing."""
 
@@ -34,13 +43,7 @@ class DifferentialTester:
                 timeout=10.0
             )
             elapsed = (time.perf_counter() - start) * 1000.0
-            out = res.stdout.strip().lower()
-            if "sat" in out and "unsat" not in out:
-                return "sat", elapsed
-            elif "unsat" in out:
-                return "unsat", elapsed
-            else:
-                return None, elapsed
+            return solver_status(res), elapsed
         except subprocess.TimeoutExpired:
             return "timeout", 10000.0
         except Exception as e:
@@ -59,13 +62,7 @@ class DifferentialTester:
                 timeout=10.0
             )
             elapsed = (time.perf_counter() - start) * 1000.0
-            out = res.stdout.strip().lower()
-            if "sat" in out and "unsat" not in out:
-                return "sat", elapsed
-            elif "unsat" in out:
-                return "unsat", elapsed
-            else:
-                return None, elapsed
+            return solver_status(res), elapsed
         except subprocess.TimeoutExpired:
             return "timeout", 10000.0
         except Exception:
@@ -74,6 +71,9 @@ class DifferentialTester:
     def test_theory(self, theory: str, iterations: int = 15) -> bool:
         """Runs differential fuzzing across a specific theory domain."""
         print(f"\n[*] Differential Testing Domain: {theory.upper()} ({iterations} iterations)")
+        if not self.z3_bin:
+            print("  [!] Z3 is required for differential testing; no comparison was performed.")
+            return False
         all_passed = True
 
         for i in range(1, iterations + 1):
@@ -96,12 +96,15 @@ class DifferentialTester:
             z3_res, z3_ms = self.run_z3(f_path)
 
             status = "PASS"
-            if z3_res and axiom_res and z3_res != axiom_res and z3_res != "timeout" and axiom_res != "timeout":
+            if axiom_res not in {"sat", "unsat"} or z3_res not in {"sat", "unsat"}:
+                all_passed = False
+                print(f"  [!] INCONCLUSIVE on iteration {i}: Axiom={axiom_res}, Z3={z3_res}")
+            elif z3_res != axiom_res:
                 status = "MISMATCH"
                 all_passed = False
                 print(f"  [!] MISMATCH on iteration {i}: Axiom={axiom_res} ({axiom_ms:.2f}ms), Z3={z3_res} ({z3_ms:.2f}ms)")
             else:
-                comp_str = f", Z3={z3_res} ({z3_ms:.2f}ms)" if z3_res else " (Z3 not installed, self-consistency verified)"
+                comp_str = f", Z3={z3_res} ({z3_ms:.2f}ms)"
                 print(f"  [+] Case {i:02d}: Axiom={axiom_res} ({axiom_ms:.2f}ms){comp_str} -> {status}")
 
         return all_passed
