@@ -1,5 +1,6 @@
 """Regression checks for generated SMT-LIB and differential result handling."""
 import shutil
+from pathlib import Path
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -25,6 +26,36 @@ class SolverToolsTests(unittest.TestCase):
         with patch("differential_tester.shutil.which", return_value=None):
             tester = DifferentialTester(axiom_bin="/missing/axiom")
         self.assertFalse(tester.test_theory("qf_lra", iterations=1))
+
+    def test_generated_inputs_are_removed_after_both_solvers_finish(self):
+        tester = DifferentialTester(z3_bin="fixture-z3")
+        paths = []
+
+        def solve(path):
+            source = Path(path)
+            self.assertTrue(source.is_file())
+            self.assertIn("(check-sat)", source.read_text(encoding="utf-8"))
+            paths.append(source)
+            return "sat", 1.0
+
+        with patch.object(tester, "run_axiom", side_effect=solve), \
+                patch.object(tester, "run_z3", side_effect=solve):
+            self.assertTrue(tester.test_theory("qf_lra", iterations=2))
+        self.assertEqual(len(set(paths)), 2)
+        self.assertTrue(all(not path.exists() and not path.parent.exists() for path in paths))
+
+    def test_generated_input_is_removed_if_solver_raises(self):
+        tester = DifferentialTester(z3_bin="fixture-z3")
+        paths = []
+
+        def fail(path):
+            paths.append(Path(path))
+            raise RuntimeError("solver fixture failed")
+
+        with patch.object(tester, "run_axiom", side_effect=fail):
+            with self.assertRaisesRegex(RuntimeError, "solver fixture failed"):
+                tester.test_theory("qf_lra", iterations=1)
+        self.assertTrue(all(not path.exists() and not path.parent.exists() for path in paths))
 
     @unittest.skipUnless(shutil.which("z3"), "Z3 executable is required")
     def test_generated_bitvector_widths_are_accepted_by_z3(self):

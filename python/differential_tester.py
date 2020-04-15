@@ -11,6 +11,7 @@ import subprocess
 import shutil
 import tempfile
 import time
+from pathlib import Path
 from typing import Optional, Tuple
 from smtlib_generator import SMTLIBGenerator
 
@@ -88,12 +89,11 @@ class DifferentialTester:
             else:
                 raise ValueError(f"Unknown theory domain: {theory}")
 
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".smt2", delete=False) as f:
-                f.write(script)
-                f_path = f.name
-
-            axiom_res, axiom_ms = self.run_axiom(f_path)
-            z3_res, z3_ms = self.run_z3(f_path)
+            with tempfile.TemporaryDirectory(prefix="axiom-differential-") as directory:
+                script_path = Path(directory) / "input.smt2"
+                script_path.write_text(script, encoding="utf-8")
+                axiom_res, axiom_ms = self.run_axiom(str(script_path))
+                z3_res, z3_ms = self.run_z3(str(script_path))
 
             status = "PASS"
             if axiom_res not in {"sat", "unsat"} or z3_res not in {"sat", "unsat"}:
