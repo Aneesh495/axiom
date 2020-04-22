@@ -58,24 +58,17 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
 
         let canon: Expr
         switch literal {
-        case let .lt(lhs, .intConst(c)):
-            canon = .le(lhs, .intConst(c - 1))
-        case let .lt(.intConst(c), rhs):
-            canon = .ge(rhs, .intConst(c + 1))
-        case let .gt(lhs, .intConst(c)):
-            canon = .ge(lhs, .intConst(c + 1))
-        case let .gt(.intConst(c), rhs):
-            canon = .le(rhs, .intConst(c - 1))
+        // Integer-valued differences must be at least one for a strict bound.
+        case let .lt(lhs, rhs):
+            canon = .le(lhs, .sub(rhs, .intConst(1)))
+        case let .gt(lhs, rhs):
+            canon = .ge(lhs, .add([rhs, .intConst(1)]))
         case let .not(inner):
             switch inner {
-            case let .le(lhs, .intConst(c)):
-                canon = .ge(lhs, .intConst(c + 1))
-            case let .le(.intConst(c), rhs):
-                canon = .le(rhs, .intConst(c - 1))
-            case let .ge(lhs, .intConst(c)):
-                canon = .le(lhs, .intConst(c - 1))
-            case let .ge(.intConst(c), rhs):
-                canon = .ge(rhs, .intConst(c + 1))
+            case let .le(lhs, rhs):
+                canon = .ge(lhs, .add([rhs, .intConst(1)]))
+            case let .ge(lhs, rhs):
+                canon = .le(lhs, .sub(rhs, .intConst(1)))
             case let .lt(lhs, rhs):
                 canon = .ge(lhs, rhs)
             case let .gt(lhs, rhs):
