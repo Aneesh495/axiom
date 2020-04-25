@@ -1,5 +1,5 @@
 {
-  "revision": "749377b3075a51f40b071e6184211f809341b9c6",
+  "revision": "66f443871038afbac95c0cec17d20df46c3ba633",
   "cases": [
     {
       "path": "pigeonhole_php32.smt2",
@@ -20,9 +20,9 @@
     {
       "path": "euclidean_gcd.smt2",
       "title": "GCD verification condition",
-      "summary": "This arithmetic fixture exposes a disagreement between the recorded Axiom and Z3 runs.",
+      "summary": "Earlier Axiom builds returned SAT on this fixture. The repaired integer comparison uses a unit gap, and both solvers now return UNSAT.",
       "input": "; Euclidean GCD Verification Condition in SMT-LIB 2.6\n(set-logic QF_LIA)\n\n(declare-const a Int)\n(declare-const b Int)\n(declare-const x Int)\n(declare-const y Int)\n\n; Precondition: a > 0 and b > 0\n(assert (> a 0))\n(assert (> b 0))\n\n; Invariance: x > 0 and y > 0\n(assert (> x 0))\n(assert (> y 0))\n\n; While loop condition: x != y\n(assert (not (= x y)))\n\n; Transition: if x > y then x' = x - y, y' = y\n(declare-const x_prime Int)\n(declare-const y_prime Int)\n\n(assert (= x_prime (- x y)))\n(assert (= y_prime y))\n(assert (> x y))\n\n; Verification condition: post invariant x' > 0 and y' > 0\n(assert (not (and (> x_prime 0) (> y_prime 0))))\n\n(check-sat)\n(exit)\n",
-      "actual": "sat\n(model\n  (define-fun a () Int 1)\n  (define-fun b () Int 1)\n  (define-fun x () Int 1)\n  (define-fun x_prime () Int 0)\n  (define-fun y () Int 1)\n  (define-fun y_prime () Int 1)\n)",
+      "actual": "unsat",
       "reference": "unsat"
     }
   ]
