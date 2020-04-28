@@ -1,0 +1,14 @@
+name: Swift solver tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+      - run: swift build -c release
+      - run: swift run -c release --skip-build AxiomTestRunner

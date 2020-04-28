@@ -115,7 +115,7 @@ Axiom is an industrial-grade formal verification kernel, SMT (Satisfiability Mod
 │   ├── AxiomVerify/            # Dijkstra VCGen, BMC, Houdini, Concurrency
 │   ├── AxiomUI/                # DAG Visualizer JSON Serializer, Console Reporter
 │   ├── AxiomCLI/               # SMT-LIB 2.6 REPL & Command-Line Driver
-│   └── AxiomTestRunner/        # Unified Test Suite (77 test cases & regressions)
+│   └── AxiomTestRunner/        # Unified test suite and regressions
 ├── tests/                      # SMT-LIB 2.6 benchmark scripts (.smt2)
 ├── python/                     # Differential testing harness & Z3 cross-validator
 ├── web/                        # Interactive proof DAG visualizer (HTML5 Canvas)
@@ -159,7 +159,7 @@ Expected output:
   ✓ Regression BUG-005: CDCL 2WL watcher state consistency across restarts
 
 ----------------------------------------
-Test Summary: 77 passed, 0 failed
+Test Summary: 78 passed, 0 failed
 ALL TESTS PASSED SMOOTHLY
 ```
 
