@@ -1,0 +1,14 @@
+.DS_Store
+/.build
+/Packages
+xcuserdata/
+DerivedData/
+.swiftpm/config/
+*.xcodeproj
+*.xcworkspace
+__pycache__/
+*.pyc
+.venv/
+bin/
+dist/
+node_modules/
