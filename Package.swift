@@ -77,8 +77,8 @@ let package = Package(
             ],
             path: "Sources/AxiomCLI"
         ),
-        .testTarget(
-            name: "AxiomTests",
+        .executableTarget(
+            name: "AxiomTestRunner",
             dependencies: [
                 "AxiomCore",
                 "AxiomAST",
@@ -89,7 +89,7 @@ let package = Package(
                 "AxiomVerify",
                 "AxiomUI"
             ],
-            path: "Tests/AxiomTests"
+            path: "Sources/AxiomTestRunner"
         )
     ]
 )
