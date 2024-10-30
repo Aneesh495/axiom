@@ -105,4 +105,68 @@ runner.suite("Rational Exact Fractions") {
     }
 }
 
+runner.suite("BitVector QF_BV Bitwise & Modular Arithmetic") {
+    runner.test("Initialization and binary string parsing") {
+        let bv = BitVector(binaryString: "#b10110010")!
+        runner.expectEqual(bv.width, 8)
+        runner.expectEqual(bv.asUInt64, 0b10110010)
+        runner.expectEqual(bv.description, "#b10110010")
+        runner.expectTrue(bv.msb)
+        runner.expectFalse(bv.lsb)
+    }
+
+    runner.test("Bitwise logic operators") {
+        let a = BitVector(width: 8, value: 0b11001010)
+        let b = BitVector(width: 8, value: 0b10101100)
+        runner.expectEqual(a & b, BitVector(width: 8, value: 0b10001000))
+        runner.expectEqual(a | b, BitVector(width: 8, value: 0b11101110))
+        runner.expectEqual(a ^ b, BitVector(width: 8, value: 0b01100110))
+        runner.expectEqual(~a, BitVector(width: 8, value: 0b00110101))
+    }
+
+    runner.test("Shifts and Rotates") {
+        let bv = BitVector(width: 8, value: 0b11001001)
+        runner.expectEqual(bv.shiftLeft(by: 2), BitVector(width: 8, value: 0b00100100))
+        runner.expectEqual(bv.logicalShiftRight(by: 2), BitVector(width: 8, value: 0b00110010))
+        runner.expectEqual(bv.arithmeticShiftRight(by: 2), BitVector(width: 8, value: 0b11110010))
+        runner.expectEqual(bv.rotateLeft(by: 1), BitVector(width: 8, value: 0b10010011))
+    }
+
+    runner.test("Slice extraction and concatenation") {
+        let bv = BitVector(width: 8, value: 0b11010010)
+        let sub = bv.extract(high: 5, low: 2) // bits 5..2: 0100
+        runner.expectEqual(sub.width, 4)
+        runner.expectEqual(sub.asUInt64, 0b0100)
+
+        let a = BitVector(width: 4, value: 0b1010)
+        let b = BitVector(width: 4, value: 0b0101)
+        let c = BitVector.concat(a, b) // 10100101
+        runner.expectEqual(c.width, 8)
+        runner.expectEqual(c.asUInt64, 0b10100101)
+    }
+
+    runner.test("Modular 2^w arithmetic and overflow wrapping") {
+        let maxU8 = BitVector(width: 8, value: 255)
+        let one = BitVector(width: 8, value: 1)
+        runner.expectEqual(maxU8 + one, BitVector(width: 8, value: 0))
+
+        let a = BitVector(width: 8, value: 20)
+        let b = BitVector(width: 8, value: 6)
+        let (q, r) = a.unsignedDividingBy(b)
+        runner.expectEqual(q, BitVector(width: 8, value: 3))
+        runner.expectEqual(r, BitVector(width: 8, value: 2))
+    }
+
+    runner.test("Signed vs unsigned comparisons") {
+        // -1 as 8-bit is 0xFF = 255
+        let minusOne = BitVector(width: 8, value: 0xFF)
+        let plusOne = BitVector(width: 8, value: 1)
+
+        // Unsigned: 1 < 255
+        runner.expectTrue(plusOne.unsignedLessThan(minusOne))
+        // Signed: -1 < 1
+        runner.expectTrue(minusOne.signedLessThan(plusOne))
+    }
+}
+
 runner.reportAndExit()
