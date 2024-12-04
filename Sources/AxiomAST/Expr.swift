@@ -1,6 +1,17 @@
 import Foundation
 import AxiomCore
 
+/// Variable binding for first-order quantifiers
+public struct QuantifierVar: Hashable, Sendable {
+    public let name: Symbol
+    public let sort: Sort
+
+    public init(name: Symbol, sort: Sort) {
+        self.name = name
+        self.sort = sort
+    }
+}
+
 /// First-Order Logic Abstract Syntax Tree node representing terms, predicates, and formulas.
 /// Features structural hashing, sort inference, and subterm extraction for SMT-LIB 2.6.
 public indirect enum Expr: Hashable, CustomStringConvertible, Sendable {
@@ -70,24 +81,20 @@ public indirect enum Expr: Hashable, CustomStringConvertible, Sendable {
     case constArray(indexSort: Sort, value: Expr)
 
     // MARK: - Quantifiers
-    case forall(variables: [(Symbol, Sort)], body: Expr)
-    case exists(variables: [(Symbol, Sort)], body: Expr)
+    case forall(variables: [QuantifierVar], body: Expr)
+    case exists(variables: [QuantifierVar], body: Expr)
 
     // MARK: - Convenience Constructors
 
     public static let `true` = Expr.boolConst(true)
     public static let `false` = Expr.boolConst(false)
 
-    public static func int(_ value: Int64) -> Expr {
-        return .intConst(BigInt(value))
-    }
-
     public static func int(_ value: BigInt) -> Expr {
         return .intConst(value)
     }
 
     public static func real(_ num: Int64, _ den: Int64 = 1) -> Expr {
-        return .realConst(Rational(num, den))
+        return .realConst(Rational(BigInt(num), BigInt(den)))
     }
 
     public static func real(_ value: Rational) -> Expr {
@@ -246,8 +253,8 @@ public indirect enum Expr: Hashable, CustomStringConvertible, Sendable {
             for arg in args { arg.collectFreeVariables(into: &set) }
         case let .forall(bound, body), let .exists(bound, body):
             var bodyVars = body.freeVariables
-            for (v, _) in bound {
-                bodyVars.remove(v)
+            for qv in bound {
+                bodyVars.remove(qv.name)
             }
             set.formUnion(bodyVars)
         case .boolConst, .intConst, .realConst, .bvConst, .stringConst:
@@ -398,10 +405,10 @@ public indirect enum Expr: Hashable, CustomStringConvertible, Sendable {
         case let .constArray(idxSort, val):
             return "((as const \(idxSort.description)) \(val.description))"
         case let .forall(vars, body):
-            let vStr = vars.map { "(\($0.0.name) \($0.1.description))" }.joined(separator: " ")
+            let vStr = vars.map { "(\($0.name.name) \($0.sort.description))" }.joined(separator: " ")
             return "(forall (\(vStr)) \(body.description))"
         case let .exists(vars, body):
-            let vStr = vars.map { "(\($0.0.name) \($0.1.description))" }.joined(separator: " ")
+            let vStr = vars.map { "(\($0.name.name) \($0.sort.description))" }.joined(separator: " ")
             return "(exists (\(vStr)) \(body.description))"
         }
     }

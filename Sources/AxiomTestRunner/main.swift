@@ -1,5 +1,6 @@
 import Foundation
 import AxiomCore
+import AxiomAST
 
 let runner = TestHarness.shared
 
@@ -341,6 +342,134 @@ runner.suite("RingBuffer Rolling Diagnostics") {
         rb.push(40.0)
         runner.expectEqual(rb.count, 3)
         runner.expectEqual(rb.average, 30.0)
+    }
+}
+
+runner.suite("AxiomAST Sorts and Expr Representations") {
+    runner.test("Sort inference and bit-vector widths") {
+        let x = Expr.variable("x", .bitVec(width: 32))
+        let y = Expr.variable("y", .bitVec(width: 32))
+        let add = Expr.bvAdd(x, y)
+        runner.expectEqual(add.sort, .bitVec(width: 32))
+
+        let arr = Expr.variable("mem", .array(index: .int, element: .real))
+        let sel = Expr.select(array: arr, index: .int(5))
+        runner.expectEqual(sel.sort, .real)
+    }
+
+    runner.test("Free variables extraction") {
+        let x = Symbol("x")
+        let y = Symbol("y")
+        let expr = Expr.and([
+            Expr.lt(.variable(name: x, sort: .int), .int(10)),
+            Expr.eq(.variable(name: y, sort: .int), .int(20))
+        ])
+        let vars = expr.freeVariables
+        runner.expectEqual(vars.count, 2)
+        runner.expectTrue(vars.contains(x))
+        runner.expectTrue(vars.contains(y))
+    }
+}
+
+runner.suite("AxiomAST Term Simplification and Constant Folding") {
+    let simplifier = TermSimplifier()
+
+    runner.test("Boolean algebraic identities") {
+        let p = Expr.variable("p", .bool)
+        // p and true -> p
+        runner.expectEqual(simplifier.simplify(.and([p, .true])), p)
+        // p and false -> false
+        runner.expectEqual(simplifier.simplify(.and([p, .false])), .false)
+        // not(not(p)) -> p
+        runner.expectEqual(simplifier.simplify(.not(.not(p))), p)
+        // p or not(p) -> true
+        runner.expectEqual(simplifier.simplify(.or([p, .not(p)])), .true)
+    }
+
+    runner.test("Arithmetic constant folding") {
+        let e1 = Expr.add([.int(10), .int(25), Expr.variable("x", .int)])
+        let s1 = simplifier.simplify(e1)
+        runner.expectEqual(s1, .add([Expr.variable("x", .int), .int(35)]))
+
+        let e2 = Expr.sub(.int(50), .int(18))
+        runner.expectEqual(simplifier.simplify(e2), .int(32))
+    }
+
+    runner.test("Bit-Vector identities and constant evaluation") {
+        let x = Expr.variable("x", .bitVec(width: 8))
+        // x ^ x -> 0
+        runner.expectEqual(simplifier.simplify(.bvXor(x, x)), .bv(width: 8, value: 0))
+
+        let c1 = Expr.bv(width: 8, value: 0x0F)
+        let c2 = Expr.bv(width: 8, value: 0xF0)
+        runner.expectEqual(simplifier.simplify(.bvOr(c1, c2)), .bv(width: 8, value: 0xFF))
+    }
+}
+
+runner.suite("AxiomAST Normal Forms & Tseitin Transformation") {
+    let nnf = NormalForms()
+    let tseitin = TseitinTransformer()
+
+    runner.test("De Morgan push to NNF") {
+        let p = Expr.variable("p", .bool)
+        let q = Expr.variable("q", .bool)
+        // not(p and q) -> not p or not q
+        let expr = Expr.not(.and([p, q]))
+        let result = nnf.toNNF(expr)
+        runner.expectEqual(result, .or([.not(p), .not(q)]))
+    }
+
+    runner.test("Linear Tseitin CNF encoding") {
+        let a = Expr.variable("a", .bool)
+        let b = Expr.variable("b", .bool)
+        let c = Expr.variable("c", .bool)
+        // formula = (a and b) or c
+        let formula = Expr.or([.and([a, b]), c])
+        let cnf = tseitin.transform(formula)
+
+        runner.expectTrue(cnf.numVariables >= 3)
+        runner.expectTrue(!cnf.clauses.isEmpty)
+    }
+}
+
+runner.suite("AxiomAST And-Inverter Graph (AIG) Synthesizer") {
+    runner.test("Structural hashing (strashing) node reuse") {
+        let aig = AIGGraph()
+        let a = aig.createVariable(name: "a")
+        let b = aig.createVariable(name: "b")
+
+        let gate1 = aig.and(a, b)
+        let gate2 = aig.and(b, a) // reversed order should resolve to same node!
+        runner.expectEqual(gate1, gate2)
+        runner.expectEqual(aig.nodeCount, 3) // 2 variables + 1 unique AND node
+    }
+
+    runner.test("Full adder logic synthesis") {
+        let aig = AIGGraph()
+        let a = aig.createVariable(name: "a")
+        let b = aig.createVariable(name: "b")
+        let cin = aig.createVariable(name: "cin")
+
+        let (sum, cout) = aig.fullAdder(bitA: a, bitB: b, carryIn: cin)
+        runner.expectNotEqual(sum, cout)
+
+        let (clauses, numVars) = aig.toCNF(outputs: [sum, cout])
+        runner.expectTrue(numVars > 3)
+        runner.expectTrue(!clauses.isEmpty)
+    }
+}
+
+runner.suite("AxiomAST Serialization and Pretty Printing") {
+    runner.test("SMT-LIB and Infix formatters") {
+        let x = Expr.variable("x", .int)
+        let y = Expr.variable("y", .int)
+        let formula = Expr.le(Expr.add([x, Expr.mul([.int(2), y])]), .int(10))
+
+        let smtPrinter = ASTPrinter(style: .smtlib)
+        runner.expectEqual(smtPrinter.printExpr(formula), "(<= (+ x (* 2 y)) 10)")
+
+        let infixPrinter = ASTPrinter(style: .infix)
+        runner.expectEqual(infixPrinter.printExpr(formula), "x + 2 * y ≤ 10")
     }
 }
 
