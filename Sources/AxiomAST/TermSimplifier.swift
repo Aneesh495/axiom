@@ -380,7 +380,7 @@ public struct TermSimplifier: Sendable {
         case let .select(array, index):
             let sArr = simplify(array)
             let sIdx = simplify(index)
-            if case let .store(innerArr, innerIdx, innerVal) = sArr {
+            if case let .store(_, innerIdx, innerVal) = sArr {
                 if sIdx == innerIdx {
                     return innerVal // select(store(a, i, v), i) -> v
                 }
