@@ -51,10 +51,12 @@ public final class EUFSolver: TheorySolver, @unchecked Sendable {
     private var termToNodeId: [Expr: Int] = [:]
     private var sigTable: [ENodeSignature: Int] = [:]
 
-    // Union-find forest with proof forest annotations
+    // Union-find forest
     private var parent: [Int] = []
     private var rank: [Int] = []
-    private var proofForest: [Int: (target: Int, reason: Expr)] = [:]
+
+    // Undirected proof graph for conflict explanations
+    private var proofAdj: [Int: [(target: Int, reason: Expr)]] = [:]
 
     // Asserted disequalities: (nodeA, nodeB, originalExpr)
     private var disequalities: [(Int, Int, Expr)] = []
@@ -62,11 +64,12 @@ public final class EUFSolver: TheorySolver, @unchecked Sendable {
     // Scope undo trail for backtracking
     private struct UndoStep: Sendable {
         enum Kind {
-            case union(rootPushed: Int, oldParent: Int, oldRank: Int, edgeTarget: Int?)
+            case union(rootPushed: Int, oldParent: Int, oldRank: Int)
             case addNode(nodeId: Int, term: Expr)
             case addSig(sig: ENodeSignature)
             case addParent(childNodeId: Int, parentNodeId: Int)
             case addDisequality
+            case addProofEdge(a: Int, b: Int)
         }
         let kind: Kind
     }
@@ -145,9 +148,11 @@ public final class EUFSolver: TheorySolver, @unchecked Sendable {
             rank[newRoot] += 1
         }
 
-        // Record proof forest edge for conflict explanations
-        proofForest[subRoot] = (target: newRoot, reason: reason)
-        undoTrail.append(UndoStep(kind: .union(rootPushed: subRoot, oldParent: subRoot, oldRank: oldRank, edgeTarget: newRoot)))
+        // Record proof edge for conflict explanations
+        proofAdj[nodeA, default: []].append((nodeB, reason))
+        proofAdj[nodeB, default: []].append((nodeA, reason))
+        undoTrail.append(UndoStep(kind: .union(rootPushed: subRoot, oldParent: subRoot, oldRank: oldRank)))
+        undoTrail.append(UndoStep(kind: .addProofEdge(a: nodeA, b: nodeB)))
 
         // Check if any asserted disequality is violated
         for (da, db, deqExpr) in disequalities {
@@ -193,48 +198,32 @@ public final class EUFSolver: TheorySolver, @unchecked Sendable {
 
     // MARK: - Explanations
 
-    /// Trace path between two nodes in the proof forest to find justifying equalities.
-    public func explainEquivalence(_ a: Int, _ b: Int) -> [Expr] {
-        var pathA: [(Int, Expr)] = []
-        var curr = a
-        while let edge = proofForest[curr] {
-            pathA.append((edge.target, edge.reason))
-            curr = edge.target
-        }
+    /// Trace shortest path between two nodes in the proof graph using BFS to find justifying equalities.
+    public func explainEquivalence(_ start: Int, _ end: Int) -> [Expr] {
+        if start == end { return [] }
+        var visited = Set<Int>([start])
+        var queue = [start]
+        var parentEdge = [Int: (prev: Int, reason: Expr)]()
 
-        var pathB: [(Int, Expr)] = []
-        curr = b
-        while let edge = proofForest[curr] {
-            pathB.append((edge.target, edge.reason))
-            curr = edge.target
-        }
-
-        // Find Lowest Common Ancestor (LCA)
-        var visited = Set<Int>()
-        for (target, _) in pathA { visited.insert(target) }
-        visited.insert(a)
-
-        var lca = b
-        for (target, _) in pathB {
-            if visited.contains(target) {
-                lca = target
-                break
+        while !queue.isEmpty {
+            let u = queue.removeFirst()
+            if u == end { break }
+            for edge in proofAdj[u] ?? [] {
+                if !visited.contains(edge.target) {
+                    visited.insert(edge.target)
+                    parentEdge[edge.target] = (u, edge.reason)
+                    queue.append(edge.target)
+                }
             }
         }
 
-        var explanations: [Expr] = []
-        curr = a
-        while curr != lca, let edge = proofForest[curr] {
-            explanations.append(edge.reason)
-            curr = edge.target
+        var result: [Expr] = []
+        var curr = end
+        while let edge = parentEdge[curr] {
+            result.append(edge.reason)
+            curr = edge.prev
         }
-        curr = b
-        while curr != lca, let edge = proofForest[curr] {
-            explanations.append(edge.reason)
-            curr = edge.target
-        }
-
-        return explanations
+        return result
     }
 
     // MARK: - TheorySolver Conformance
@@ -248,10 +237,18 @@ public final class EUFSolver: TheorySolver, @unchecked Sendable {
         while undoTrail.count > limit {
             let step = undoTrail.removeLast()
             switch step.kind {
-            case let .union(rootPushed, oldParent, oldRank, _):
+            case let .union(rootPushed, oldParent, oldRank):
                 parent[rootPushed] = oldParent
                 rank[parent[rootPushed]] = oldRank
-                proofForest.removeValue(forKey: rootPushed)
+            case let .addProofEdge(a, b):
+                if var listA = proofAdj[a], !listA.isEmpty {
+                    listA.removeLast()
+                    proofAdj[a] = listA
+                }
+                if var listB = proofAdj[b], !listB.isEmpty {
+                    listB.removeLast()
+                    proofAdj[b] = listB
+                }
             case let .addNode(nodeId, term):
                 termToNodeId.removeValue(forKey: term)
                 if nodeId == nodes.count - 1 {
@@ -277,7 +274,7 @@ public final class EUFSolver: TheorySolver, @unchecked Sendable {
         sigTable.removeAll(keepingCapacity: true)
         parent.removeAll(keepingCapacity: true)
         rank.removeAll(keepingCapacity: true)
-        proofForest.removeAll(keepingCapacity: true)
+        proofAdj.removeAll(keepingCapacity: true)
         disequalities.removeAll(keepingCapacity: true)
         undoTrail.removeAll(keepingCapacity: true)
         scopeLimits.removeAll(keepingCapacity: true)
