@@ -679,4 +679,93 @@ runner.suite("AxiomTheories EUF Congruence Closure & Explanations") {
     }
 }
 
+runner.suite("AxiomTheories QF_LRA Simplex & Farkas Certificates") {
+    runner.test("Feasible 2D linear inequality polytope") {
+        let lra = LRASolver()
+        let x = Expr.variable(name: "x", sort: .real)
+        let y = Expr.variable(name: "y", sort: .real)
+
+        // x >= 0, y >= 0, x + y <= 4, 2x + y <= 5
+        runner.expectEqual(lra.assertLiteral(.ge(x, .realConst(.zero))), .consistent)
+        runner.expectEqual(lra.assertLiteral(.ge(y, .realConst(.zero))), .consistent)
+        runner.expectEqual(lra.assertLiteral(.le(.add([x, y]), .realConst(Rational(4)))), .consistent)
+        runner.expectEqual(lra.assertLiteral(.le(.add([.mul([.realConst(Rational(2)), x]), y]), .realConst(Rational(5)))), .consistent)
+
+        let res = lra.checkConsistency()
+        runner.expectEqual(res, .consistent)
+
+        // Verify model satisfies constraints
+        let xVal = lra.variableValue(x) ?? .zero
+        let yVal = lra.variableValue(y) ?? .zero
+        runner.expectTrue(xVal >= .zero)
+        runner.expectTrue(yVal >= .zero)
+        runner.expectTrue(xVal + yVal <= Rational(4))
+        runner.expectTrue(Rational(2) * xVal + yVal <= Rational(5))
+    }
+
+    runner.test("Infeasible linear system with Farkas conflict refutation") {
+        let lra = LRASolver()
+        let x = Expr.variable(name: "x", sort: .real)
+        let y = Expr.variable(name: "y", sort: .real)
+
+        // x >= 2, y >= 1, x + y <= 2 (impossible since 2 + 1 = 3 > 2)
+        let c1 = Expr.ge(x, .realConst(Rational(2)))
+        let c2 = Expr.ge(y, .realConst(Rational(1)))
+        let c3 = Expr.le(.add([x, y]), .realConst(Rational(2)))
+
+        runner.expectEqual(lra.assertLiteral(c1), .consistent)
+        runner.expectEqual(lra.assertLiteral(c2), .consistent)
+        let res = lra.assertLiteral(c3)
+
+        if case let .conflict(explanation) = res {
+            runner.expectTrue(explanation.contains(c1))
+            runner.expectTrue(explanation.contains(c2))
+            runner.expectTrue(explanation.contains(c3))
+        } else {
+            runner.expectTrue(false, "Expected conflict for inconsistent linear bounds")
+        }
+    }
+
+    runner.test("Bounds propagation across simplex tableau row") {
+        let lra = LRASolver()
+        let x = Expr.variable(name: "x", sort: .real)
+        let y = Expr.variable(name: "y", sort: .real)
+        let sum = Expr.variable(name: "s", sort: .real)
+
+        // s = x + y, x >= 2, y >= 3 -> s >= 5
+        let xBound = Expr.ge(x, .realConst(Rational(2)))
+        let yBound = Expr.ge(y, .realConst(Rational(3)))
+        let defRow = Expr.eq(sum, .add([x, y]))
+
+        runner.expectEqual(lra.assertLiteral(defRow), .consistent)
+        runner.expectEqual(lra.assertLiteral(xBound), .consistent)
+        runner.expectEqual(lra.assertLiteral(yBound), .consistent)
+
+        let deductions = lra.propagateDeductions()
+        let hasPropagatedLower = deductions.contains { d in
+            if case let .ge(term, .realConst(val)) = d.literal, term == sum {
+                return val >= Rational(5)
+            }
+            return false
+        }
+        runner.expectTrue(hasPropagatedLower, "Expected deduced lower bound s >= 5")
+    }
+
+    runner.test("Incremental scoping and backtracking in LRA Simplex") {
+        let lra = LRASolver()
+        let x = Expr.variable(name: "x", sort: .real)
+
+        runner.expectEqual(lra.assertLiteral(.ge(x, .realConst(.zero))), .consistent)
+
+        lra.pushScope()
+        runner.expectEqual(lra.assertLiteral(.ge(x, .realConst(Rational(10)))), .consistent)
+        runner.expectTrue((lra.variableValue(x) ?? .zero) >= Rational(10))
+
+        lra.popScope()
+        // Now x <= 5 is consistent because x >= 10 was popped
+        runner.expectEqual(lra.assertLiteral(.le(x, .realConst(Rational(5)))), .consistent)
+        runner.expectEqual(lra.checkConsistency(), .consistent)
+    }
+}
+
 runner.reportAndExit()
