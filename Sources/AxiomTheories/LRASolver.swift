@@ -71,6 +71,10 @@ public final class LRASolver: TheorySolver, @unchecked Sendable {
     private var assertedConstraints: [Expr] = []
     private var pendingDeductions: [TheoryDeduction] = []
 
+    private var isConflicted: Bool = false
+    private var conflictExplanation: [Expr] = []
+    private var conflictScopeLevel: Int? = nil
+
     public init() {}
 
     // MARK: - Variable & Term Allocation
@@ -93,7 +97,33 @@ public final class LRASolver: TheorySolver, @unchecked Sendable {
 
     /// Add a constraint as a new row in the tableau: basicVar = sum(coeff * nonBasicVar)
     public func addRow(basicVar: Int, terms: [Int: Rational]) {
-        tableau[basicVar] = terms
+        var substitutedTerms: [Int: Rational] = [:]
+
+        for (v, coeff) in terms {
+            if basicVars.contains(v) {
+                // v is currently a basic variable: substitute its definition
+                if let vRow = tableau[v] {
+                    for (nbVar, nbCoeff) in vRow {
+                        let newCoeff = (substitutedTerms[nbVar] ?? .zero) + coeff * nbCoeff
+                        if newCoeff.isZero {
+                            substitutedTerms.removeValue(forKey: nbVar)
+                        } else {
+                            substitutedTerms[nbVar] = newCoeff
+                        }
+                    }
+                }
+            } else {
+                // v is non-basic
+                let newCoeff = (substitutedTerms[v] ?? .zero) + coeff
+                if newCoeff.isZero {
+                    substitutedTerms.removeValue(forKey: v)
+                } else {
+                    substitutedTerms[v] = newCoeff
+                }
+            }
+        }
+
+        tableau[basicVar] = substitutedTerms
         basicVars.insert(basicVar)
         nonBasicVars.remove(basicVar)
         values[basicVar] = computeRowValue(basicVar)
@@ -158,6 +188,10 @@ public final class LRASolver: TheorySolver, @unchecked Sendable {
 
     /// Run Dual Simplex to restore feasibility across all basic variable bounds.
     public func checkFeasibility() -> TheoryResult {
+        if isConflicted {
+            return .conflict(explanation: conflictExplanation)
+        }
+
         let maxIterations = 5000
         var iteration = 0
 
@@ -177,16 +211,21 @@ public final class LRASolver: TheorySolver, @unchecked Sendable {
             guard let pivotCol = findPivotColumn(basicVar: violatingBasic, isLowerViolation: isLowerViolation) else {
                 // No column can repair the violation: unsatisfiable conflict!
                 let explanation = buildFarkasConflict(violatingBasic: violatingBasic, isLowerViolation: isLowerViolation)
+                isConflicted = true
+                conflictExplanation = explanation
+                conflictScopeLevel = scopeLimits.count
                 return .conflict(explanation: explanation)
             }
 
             // Update value of nonBasic to repair violatingBasic
-            let delta = isLowerViolation
-                ? (lowerBounds[violatingBasic]!.value - val)
-                : (upperBounds[violatingBasic]!.value - val)
+            let targetVal = isLowerViolation
+                ? lowerBounds[violatingBasic]!.value
+                : upperBounds[violatingBasic]!.value
+            let delta = targetVal - val
             let a_ij = tableau[violatingBasic]![pivotCol]!
             let theta = delta / a_ij
 
+            values[violatingBasic] = targetVal
             values[pivotCol] = (values[pivotCol] ?? .zero) + theta
             pivot(basic: violatingBasic, nonBasic: pivotCol)
 
@@ -363,7 +402,11 @@ public struct FarkasCertificate: Sendable {
             }
             if let currentUb = oldUpper, bound.value > currentUb.value {
                 // Immediate bound clash
-                return .conflict(explanation: [bound.reason, currentUb.reason])
+                let expl = [bound.reason, currentUb.reason]
+                isConflicted = true
+                conflictExplanation = expl
+                conflictScopeLevel = scopeLimits.count
+                return .conflict(explanation: expl)
             }
             lowerBounds[variable] = bound
         } else {
@@ -372,7 +415,11 @@ public struct FarkasCertificate: Sendable {
             }
             if let currentLb = oldLower, bound.value < currentLb.value {
                 // Immediate bound clash
-                return .conflict(explanation: [bound.reason, currentLb.reason])
+                let expl = [bound.reason, currentLb.reason]
+                isConflicted = true
+                conflictExplanation = expl
+                conflictScopeLevel = scopeLimits.count
+                return .conflict(explanation: expl)
             }
             upperBounds[variable] = bound
         }
@@ -409,6 +456,11 @@ public struct FarkasCertificate: Sendable {
             lowerBounds[undo.variable] = undo.oldLower
             upperBounds[undo.variable] = undo.oldUpper
         }
+        if let cLevel = conflictScopeLevel, cLevel > scopeLimits.count {
+            isConflicted = false
+            conflictExplanation = []
+            conflictScopeLevel = nil
+        }
         for bVar in basicVars {
             values[bVar] = computeRowValue(bVar)
         }
@@ -428,6 +480,9 @@ public struct FarkasCertificate: Sendable {
         scopeLimits.removeAll(keepingCapacity: true)
         assertedConstraints.removeAll(keepingCapacity: true)
         pendingDeductions.removeAll(keepingCapacity: true)
+        isConflicted = false
+        conflictExplanation = []
+        conflictScopeLevel = nil
     }
 
     public func assertLiteral(_ literal: Expr) -> TheoryResult {
@@ -444,9 +499,7 @@ public struct FarkasCertificate: Sendable {
         case let .gt(lhs, rhs):
             return assertInequality(lhs: lhs, rhs: rhs, isStrict: true, isGreater: true, originalExpr: literal)
         case let .eq(lhs, rhs):
-            let r1 = assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: false, originalExpr: literal)
-            if case .conflict = r1 { return r1 }
-            return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: true, originalExpr: literal)
+            return assertEquality(lhs: lhs, rhs: rhs, originalExpr: literal)
         case let .not(inner):
             // Invert condition
             switch inner {
@@ -464,6 +517,36 @@ public struct FarkasCertificate: Sendable {
         default:
             return .consistent
         }
+    }
+
+    private func assertEquality(lhs: Expr, rhs: Expr, originalExpr: Expr) -> TheoryResult {
+        let poly = toPolynomial(expr: lhs) - toPolynomial(expr: rhs)
+
+        if poly.terms.isEmpty {
+            if poly.constant.isZero {
+                return .consistent
+            } else {
+                return .conflict(explanation: [originalExpr])
+            }
+        }
+
+        if poly.terms.count == 1, let (v, coeff) = poly.terms.first {
+            let boundVal = -poly.constant / coeff
+            let bInfo = BoundInfo(value: boundVal, reason: originalExpr, isStrict: false)
+            let r1 = setBound(variable: v, bound: bInfo, isLower: true)
+            if case .conflict = r1 { return r1 }
+            return setBound(variable: v, bound: bInfo, isLower: false)
+        }
+
+        let slackExpr = Expr.variable(name: Symbol("slack_\(varCount)"), sort: .real)
+        let s = registerVariable(slackExpr)
+        addRow(basicVar: s, terms: poly.terms)
+
+        let boundVal = -poly.constant
+        let bInfo = BoundInfo(value: boundVal, reason: originalExpr, isStrict: false)
+        let r1 = setBound(variable: s, bound: bInfo, isLower: true)
+        if case .conflict = r1 { return r1 }
+        return setBound(variable: s, bound: bInfo, isLower: false)
     }
 
     private func assertInequality(
