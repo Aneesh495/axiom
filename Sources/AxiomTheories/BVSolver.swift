@@ -163,9 +163,14 @@ public final class BVSolver: TheorySolver, @unchecked Sendable {
             guard case .variable(_, .bitVec(let width)) = expr else { continue }
             var bitVec = BitVector(width: width, value: 0)
             for (i, lit) in bits.enumerated() {
-                let varIdx = Int32(lit.nodeIndex)
-                let rawVal = satSolver.modelValue(for: varIdx)
-                let bitVal = lit.isInverted ? !rawVal : rawVal
+                let bitVal: Bool
+                if lit.isConstant {
+                    bitVal = (lit == .true)
+                } else {
+                    let satVar = Int32(lit.nodeIndex - 1)
+                    let rawVal = satSolver.modelValue(for: satVar)
+                    bitVal = lit.isInverted ? !rawVal : rawVal
+                }
                 if bitVal {
                     bitVec.setBit(at: i, value: true)
                 }

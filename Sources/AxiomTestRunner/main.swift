@@ -834,4 +834,142 @@ runner.suite("AxiomTheories QF_LIA Integer Arithmetic & Diophantine Verification
     }
 }
 
+runner.suite("AxiomTheories QF_BV Bit-Vector AIG Bit-Blasting & Arithmetic") {
+    runner.test("Word-level constant evaluation and bitwise algebra") {
+        let bv = BVSolver()
+        let a = Expr.bvConst(BitVector(width: 8, value: 0xAA))
+        let b = Expr.bvConst(BitVector(width: 8, value: 0x55))
+
+        // 0xAA ^ 0x55 == 0xFF
+        let xorEq = Expr.eq(.bvXor(a, b), .bvConst(BitVector(width: 8, value: 0xFF)))
+        runner.expectEqual(bv.assertLiteral(xorEq), .consistent)
+
+        // 10 + 20 == 30
+        let addEq = Expr.eq(
+            .bvAdd(.bvConst(BitVector(width: 8, value: 10)), .bvConst(BitVector(width: 8, value: 20))),
+            .bvConst(BitVector(width: 8, value: 30))
+        )
+        runner.expectEqual(bv.assertLiteral(addEq), .consistent)
+
+        let res = bv.checkConsistency()
+        runner.expectEqual(res, .consistent)
+    }
+
+    runner.test("Bit-blasted 8-bit modular addition and variable assignment") {
+        let bv = BVSolver()
+        let x = Expr.variable(name: "x", sort: .bitVec(width: 8))
+        let five = Expr.bvConst(BitVector(width: 8, value: 5))
+        let twelve = Expr.bvConst(BitVector(width: 8, value: 12))
+
+        // x + 5 == 12 -> x == 7
+        let eq = Expr.eq(.bvAdd(x, five), twelve)
+        runner.expectEqual(bv.assertLiteral(eq), .consistent)
+
+        let res = bv.checkConsistency()
+        runner.expectEqual(res, .consistent)
+        if let xVal = bv.getValue(of: x) {
+            runner.expectEqual(xVal, BitVector(width: 8, value: 7))
+        } else {
+            runner.expectTrue(false, "Expected model value for variable x")
+        }
+    }
+
+    runner.test("Bit-blasted bitwise masking and bit extraction") {
+        let bv = BVSolver()
+        let x = Expr.variable(name: "x", sort: .bitVec(width: 8))
+
+        // x & 0x0F == 0x0A
+        let maskAnd = Expr.eq(
+            .bvAnd(x, .bvConst(BitVector(width: 8, value: 0x0F))),
+            .bvConst(BitVector(width: 8, value: 0x0A))
+        )
+        // x & 0xF0 == 0xB0
+        let maskOr = Expr.eq(
+            .bvAnd(x, .bvConst(BitVector(width: 8, value: 0xF0))),
+            .bvConst(BitVector(width: 8, value: 0xB0))
+        )
+
+        runner.expectEqual(bv.assertLiteral(maskAnd), .consistent)
+        runner.expectEqual(bv.assertLiteral(maskOr), .consistent)
+
+        let res = bv.checkConsistency()
+        runner.expectEqual(res, .consistent)
+        if let xVal = bv.getValue(of: x) {
+            runner.expectEqual(xVal, BitVector(width: 8, value: 0xBA))
+        } else {
+            runner.expectTrue(false, "Expected model value for variable x")
+        }
+    }
+
+    runner.test("Unsigned comparison refutation & overflow detection") {
+        let bv = BVSolver()
+        let x = Expr.variable(name: "x", sort: .bitVec(width: 8))
+
+        // x + 1 <_u x (satisfiable if and only if x == 255)
+        let one = Expr.bvConst(BitVector(width: 8, value: 1))
+        let overflowCond = Expr.bvULt(.bvAdd(x, one), x)
+
+        runner.expectEqual(bv.assertLiteral(overflowCond), .consistent)
+        let res = bv.checkConsistency()
+        runner.expectEqual(res, .consistent)
+
+        if let xVal = bv.getValue(of: x) {
+            runner.expectEqual(xVal, BitVector(width: 8, value: 255))
+        } else {
+            runner.expectTrue(false, "Expected model value for variable x on overflow")
+        }
+    }
+
+    runner.test("Shift-and-add multiplication synthesis") {
+        let bv = BVSolver()
+        let x = Expr.variable(name: "x", sort: .bitVec(width: 8))
+        let y = Expr.variable(name: "y", sort: .bitVec(width: 8))
+
+        // x * y == 35, x > 1, y > 1 (factors of 35 are 5 and 7)
+        let mulEq = Expr.eq(.bvMul(x, y), .bvConst(BitVector(width: 8, value: 35)))
+        let xGt1 = Expr.bvULt(.bvConst(BitVector(width: 8, value: 1)), x)
+        let yGt1 = Expr.bvULt(.bvConst(BitVector(width: 8, value: 1)), y)
+
+        runner.expectEqual(bv.assertLiteral(mulEq), .consistent)
+        runner.expectEqual(bv.assertLiteral(xGt1), .consistent)
+        runner.expectEqual(bv.assertLiteral(yGt1), .consistent)
+
+        let res = bv.checkConsistency()
+        runner.expectEqual(res, .consistent)
+
+        if let xVal = bv.getValue(of: x), let yVal = bv.getValue(of: y) {
+            let xInt = xVal.words[0]
+            let yInt = yVal.words[0]
+            runner.expectEqual((xInt * yInt) & 0xFF, 35)
+            runner.expectTrue(xInt > 1)
+            runner.expectTrue(yInt > 1)
+        } else {
+            runner.expectTrue(false, "Expected model values for factors x and y")
+        }
+    }
+
+    runner.test("Incremental backtracking and scope popping in BV solver") {
+        let bv = BVSolver()
+        let x = Expr.variable(name: "x", sort: .bitVec(width: 8))
+
+        bv.pushScope()
+        let c1 = Expr.eq(x, .bvConst(BitVector(width: 8, value: 42)))
+        let c2 = Expr.eq(x, .bvConst(BitVector(width: 8, value: 43)))
+        _ = bv.assertLiteral(c1)
+        _ = bv.assertLiteral(c2)
+
+        let resConflict = bv.checkConsistency()
+        runner.expectEqual(resConflict, .conflict(explanation: [c1, c2]))
+
+        bv.popScope()
+
+        // After pop, asserting x == 43 should now be consistent
+        _ = bv.assertLiteral(c2)
+        let resConsistent = bv.checkConsistency()
+        runner.expectEqual(resConsistent, .consistent)
+        runner.expectEqual(bv.getValue(of: x), BitVector(width: 8, value: 43))
+    }
+}
+
 runner.reportAndExit()
+
