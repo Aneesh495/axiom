@@ -27,11 +27,13 @@ public enum BMCResult: CustomStringConvertible, Sendable {
 public final class BMC: @unchecked Sendable {
     private let solver: SMTSolver
     private var versionCounter: [Symbol: Int]
+    private var variableSorts: [Symbol: Sort]
     private var ssaFormulas: [Expr]
 
     public init() {
         self.solver = SMTSolver()
         self.versionCounter = [:]
+        self.variableSorts = [:]
         self.ssaFormulas = []
     }
 
@@ -39,6 +41,7 @@ public final class BMC: @unchecked Sendable {
     public func check(procedure: Procedure, bound: Int) -> BMCResult {
         solver.reset()
         versionCounter.removeAll(keepingCapacity: true)
+        variableSorts.removeAll(keepingCapacity: true)
         ssaFormulas.removeAll(keepingCapacity: true)
 
         // 1. Assert preconditions
@@ -113,17 +116,20 @@ public final class BMC: @unchecked Sendable {
             )
 
         case let .whileLoop(cond, _, body):
-            // Unroll loop up to bound iterations
-            var current: Stmt = .assume(condition: .not(cond)) // unwinding assertion / termination assume
-            for _ in stride(from: bound, through: 1, by: -1) {
-                let unrolledBody = unroll(stmt: body, bound: bound)
-                current = .ifThenElse(
-                    condition: cond,
-                    thenBranch: .seq([unrolledBody, current]),
-                    elseBranch: .skip
+            // Unroll loop up to bound iterations sequentially
+            let unrolledBody = unroll(stmt: body, bound: bound)
+            var unrolledStmts: [Stmt] = []
+            for _ in 0..<bound {
+                unrolledStmts.append(
+                    .ifThenElse(
+                        condition: cond,
+                        thenBranch: unrolledBody,
+                        elseBranch: .skip
+                    )
                 )
             }
-            return current
+            unrolledStmts.append(.assume(condition: .not(cond)))
+            return .seq(unrolledStmts)
         }
     }
 
@@ -135,6 +141,7 @@ public final class BMC: @unchecked Sendable {
             return (pathCondition, [])
 
         case let .assign(variable, value):
+            variableSorts[variable] = value.sort
             let currentVal = mapToCurrentSSAVariables(value)
             let nextVer = (versionCounter[variable] ?? 0) + 1
             versionCounter[variable] = nextVer
@@ -158,12 +165,12 @@ public final class BMC: @unchecked Sendable {
             let stateBefore = versionCounter
 
             let thenPath = Expr.and([pathCondition, ssaCond])
-            let (finalThenPath, thenAss) = encodeSSA(stmt: thenBranch, pathCondition: thenPath)
+            let (_, thenAss) = encodeSSA(stmt: thenBranch, pathCondition: thenPath)
             let stateAfterThen = versionCounter
 
             versionCounter = stateBefore
             let elsePath = Expr.and([pathCondition, .not(ssaCond)])
-            let (finalElsePath, elseAss) = encodeSSA(stmt: elseBranch, pathCondition: elsePath)
+            let (_, elseAss) = encodeSSA(stmt: elseBranch, pathCondition: elsePath)
             let stateAfterElse = versionCounter
 
             // Phi-node join for modified variables
@@ -175,16 +182,17 @@ public final class BMC: @unchecked Sendable {
                     let nextVer = max(verThen, verElse) + 1
                     versionCounter[v] = nextVer
 
-                    let varThen = Expr.variable(name: Symbol("\(v.name)_\(verThen)"), sort: .int)
-                    let varElse = Expr.variable(name: Symbol("\(v.name)_\(verElse)"), sort: .int)
-                    let varJoin = Expr.variable(name: Symbol("\(v.name)_\(nextVer)"), sort: .int)
+                    let s = variableSorts[v] ?? .int
+                    let varThen = Expr.variable(name: Symbol("\(v.name)_\(verThen)"), sort: s)
+                    let varElse = Expr.variable(name: Symbol("\(v.name)_\(verElse)"), sort: s)
+                    let varJoin = Expr.variable(name: Symbol("\(v.name)_\(nextVer)"), sort: s)
 
-                    let iteExpr = Expr.ite(condition: ssaCond, thenBranch: varThen, elseBranch: varElse)
-                    ssaFormulas.append(Expr.eq(varJoin, iteExpr))
+                    ssaFormulas.append(Expr.implies(ssaCond, Expr.eq(varJoin, varThen)))
+                    ssaFormulas.append(Expr.implies(Expr.not(ssaCond), Expr.eq(varJoin, varElse)))
                 }
             }
 
-            return (Expr.or([finalThenPath, finalElsePath]), thenAss + elseAss)
+            return (pathCondition, thenAss + elseAss)
 
         case let .assert(assertion, _):
             let ssaAss = mapToCurrentSSAVariables(assertion)

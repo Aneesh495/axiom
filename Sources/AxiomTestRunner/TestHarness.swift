@@ -33,37 +33,43 @@ public final class TestHarness: @unchecked Sendable {
 
     public func expectEqual<T: Equatable>(_ a: T, _ b: T, _ message: String = "", file: StaticString = #file, line: UInt = #line) {
         if a != b {
-            fatalError("Assertion failure: \(a) != \(b) [\(message)] at \(file):\(line)")
+            print("\u{001B}[31mAssertion failure: \(a) != \(b) [\(message)] at \(file):\(line)\u{001B}[0m")
+            exit(1)
         }
     }
 
     public func expectNotEqual<T: Equatable>(_ a: T, _ b: T, _ message: String = "", file: StaticString = #file, line: UInt = #line) {
         if a == b {
-            fatalError("Assertion failure: \(a) == \(b) [\(message)] at \(file):\(line)")
+            print("\u{001B}[31mAssertion failure: \(a) == \(b) [\(message)] at \(file):\(line)\u{001B}[0m")
+            exit(1)
         }
     }
 
     public func expectTrue(_ condition: Bool, _ message: String = "", file: StaticString = #file, line: UInt = #line) {
         if !condition {
-            fatalError("Assertion failure: expected true [\(message)] at \(file):\(line)")
+            print("\u{001B}[31mAssertion failure: expected true [\(message)] at \(file):\(line)\u{001B}[0m")
+            exit(1)
         }
     }
 
     public func expectFalse(_ condition: Bool, _ message: String = "", file: StaticString = #file, line: UInt = #line) {
         if condition {
-            fatalError("Assertion failure: expected false [\(message)] at \(file):\(line)")
+            print("\u{001B}[31mAssertion failure: expected false [\(message)] at \(file):\(line)\u{001B}[0m")
+            exit(1)
         }
     }
 
     public func expectNil<T>(_ value: T?, _ message: String = "", file: StaticString = #file, line: UInt = #line) {
         if value != nil {
-            fatalError("Assertion failure: expected nil [\(message)] at \(file):\(line)")
+            print("\u{001B}[31mAssertion failure: expected nil [\(message)] at \(file):\(line)\u{001B}[0m")
+            exit(1)
         }
     }
 
     public func expectNotNil<T>(_ value: T?, _ message: String = "", file: StaticString = #file, line: UInt = #line) {
         if value == nil {
-            fatalError("Assertion failure: expected not nil [\(message)] at \(file):\(line)")
+            print("\u{001B}[31mAssertion failure: expected not nil [\(message)] at \(file):\(line)\u{001B}[0m")
+            exit(1)
         }
     }
 

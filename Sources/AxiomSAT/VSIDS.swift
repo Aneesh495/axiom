@@ -52,13 +52,19 @@ public final class VSIDS: @unchecked Sendable {
         varInc *= (1.0 / varDecay)
     }
 
+    /// Re-insert an unassigned variable back into the decision priority queue
+    public func insertVariable(_ v: Int32) {
+        if !orderHeap.contains(v) {
+            let act = Int(v) < activities.count ? activities[Int(v)] : 0.0
+            orderHeap.insert(element: v, priority: act)
+        }
+    }
+
     /// Select the unassigned variable with the highest activity score
     public func selectDecisionVariable(trail: Trail) -> Int32? {
         while let top = orderHeap.pop() {
             let v = top.element
             if trail.value(of: v) == .undef {
-                // Re-insert variable so it remains in heap for future decisions/updates
-                orderHeap.insert(element: v, priority: top.priority)
                 return v
             }
         }

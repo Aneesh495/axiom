@@ -128,9 +128,11 @@ public final class Trail: @unchecked Sendable {
 
     // MARK: - Non-Chronological Backtracking
 
-    public func backtrack(toLevel targetLevel: Int32) {
-        guard targetLevel < decisionLevel else { return }
+    @discardableResult
+    public func backtrack(toLevel targetLevel: Int32) -> [Int32] {
+        guard targetLevel < decisionLevel else { return [] }
 
+        var unassigned: [Int32] = []
         let targetIndex = trailLim[Int(targetLevel)]
         while trail.count > targetIndex {
             let lit = trail.removeLast()
@@ -138,7 +140,9 @@ public final class Trail: @unchecked Sendable {
             assigns[idx] = .undef
             varLevel[idx] = -1
             varReason[idx] = -1
+            unassigned.append(lit.variable)
         }
         trailLim.removeSubrange(Int(targetLevel)...)
+        return unassigned
     }
 }

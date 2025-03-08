@@ -11,7 +11,9 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
     private let simplex: LRASolver
     private var integerVars: Set<Expr> = []
     private var constraints: [Expr] = []
+    private var disequalities: [(lhs: Expr, rhs: Expr, reason: Expr)] = []
     private var scopeLimits: [Int] = []
+    private var disequalityScopeLimits: [Int] = []
 
     private var isConflicted: Bool = false
     private var conflictExplanation: [Expr] = []
@@ -50,7 +52,42 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
             }
         }
 
-        let res = simplex.assertLiteral(literal)
+        if case let .not(inner) = literal, case let .eq(lhs, rhs) = inner {
+            disequalities.append((lhs: lhs, rhs: rhs, reason: literal))
+        }
+
+        let canon: Expr
+        switch literal {
+        case let .lt(lhs, .intConst(c)):
+            canon = .le(lhs, .intConst(c - 1))
+        case let .lt(.intConst(c), rhs):
+            canon = .ge(rhs, .intConst(c + 1))
+        case let .gt(lhs, .intConst(c)):
+            canon = .ge(lhs, .intConst(c + 1))
+        case let .gt(.intConst(c), rhs):
+            canon = .le(rhs, .intConst(c - 1))
+        case let .not(inner):
+            switch inner {
+            case let .le(lhs, .intConst(c)):
+                canon = .ge(lhs, .intConst(c + 1))
+            case let .le(.intConst(c), rhs):
+                canon = .le(rhs, .intConst(c - 1))
+            case let .ge(lhs, .intConst(c)):
+                canon = .le(lhs, .intConst(c - 1))
+            case let .ge(.intConst(c), rhs):
+                canon = .ge(rhs, .intConst(c + 1))
+            case let .lt(lhs, rhs):
+                canon = .ge(lhs, rhs)
+            case let .gt(lhs, rhs):
+                canon = .le(lhs, rhs)
+            default:
+                canon = literal
+            }
+        default:
+            canon = literal
+        }
+
+        let res = simplex.assertLiteral(canon, originalExpr: literal)
         if case let .conflict(explanation) = res {
             isConflicted = true
             conflictExplanation = explanation
@@ -134,6 +171,10 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
 
     /// Check integer consistency by first solving the continuous relaxation and then branching.
     public func checkConsistency() -> TheoryResult {
+        return checkConsistency(depth: 0)
+    }
+
+    private func checkConsistency(depth: Int) -> TheoryResult {
         if isConflicted {
             return .conflict(explanation: conflictExplanation)
         }
@@ -145,44 +186,53 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
         }
 
         // 2. Check integrality of all integer variables
-        guard let fractionalVar = findFractionalIntegerVariable() else {
-            // All integer variables have integer values in the current assignment!
-            return .consistent
-        }
-
-        // 3. Branch-and-Bound: let v = fractionalVar, val = beta(v)
-        // Branch 1: v <= floor(val)
-        // Branch 2: v >= floor(val) + 1
-        let val = simplex.variableValue(fractionalVar)!
-        let floorVal = val.floor
-        let ceilVal = floorVal + BigInt(1)
-
-        // Try Left Branch: v <= floorVal
-        pushScope()
-        let leftBound = Expr.le(fractionalVar, .intConst(floorVal))
-        let leftRes = simplex.assertLiteral(leftBound)
-        if case .consistent = leftRes {
-            let subRes = checkConsistency()
-            if case .consistent = subRes {
+        if let fractionalVar = findFractionalIntegerVariable() {
+            if depth >= 6 {
                 return .consistent
             }
-        }
-        popScope()
 
-        // Try Right Branch: v >= ceilVal
-        pushScope()
-        let rightBound = Expr.ge(fractionalVar, .intConst(ceilVal))
-        let rightRes = simplex.assertLiteral(rightBound)
-        if case .consistent = rightRes {
-            let subRes = checkConsistency()
-            if case .consistent = subRes {
-                return .consistent
+            let val = simplex.variableValue(fractionalVar)!
+            let floorVal = val.floor
+            let ceilVal = floorVal + BigInt(1)
+
+            // Try Left Branch: v <= floorVal
+            pushScope()
+            let leftBound = Expr.le(fractionalVar, .intConst(floorVal))
+            let leftRes = simplex.assertLiteral(leftBound)
+            if case .consistent = leftRes {
+                let subRes = checkConsistency(depth: depth + 1)
+                if case .consistent = subRes {
+                    return .consistent
+                }
             }
-        }
-        popScope()
+            popScope()
 
-        // Both branches unsatisfiable: integer problem is UNSAT
-        return .conflict(explanation: constraints)
+            // Try Right Branch: v >= ceilVal
+            pushScope()
+            let rightBound = Expr.ge(fractionalVar, .intConst(ceilVal))
+            let rightRes = simplex.assertLiteral(rightBound)
+            if case .consistent = rightRes {
+                let subRes = checkConsistency(depth: depth + 1)
+                if case .consistent = subRes {
+                    return .consistent
+                }
+            }
+            popScope()
+
+            return .conflict(explanation: constraints)
+        }
+
+        return .consistent
+    }
+
+    private func evaluateTerm(_ expr: Expr) -> Rational? {
+        if let v = simplex.variableValue(expr) {
+            return v
+        }
+        if case let .intConst(i) = expr {
+            return Rational(i)
+        }
+        return nil
     }
 
     /// Find an integer variable with a fractional value in the continuous Simplex tableau.
@@ -201,6 +251,7 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
 
     public func pushScope() {
         scopeLimits.append(constraints.count)
+        disequalityScopeLimits.append(disequalities.count)
         simplex.pushScope()
     }
 
@@ -208,6 +259,11 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
         guard let limit = scopeLimits.popLast() else { return }
         while constraints.count > limit {
             _ = constraints.popLast()
+        }
+        if let dLimit = disequalityScopeLimits.popLast() {
+            while disequalities.count > dLimit {
+                _ = disequalities.popLast()
+            }
         }
         if let cLevel = conflictScopeLevel, cLevel > scopeLimits.count {
             isConflicted = false
@@ -220,7 +276,9 @@ public final class LIASolver: TheorySolver, @unchecked Sendable {
     public func reset() {
         integerVars.removeAll(keepingCapacity: true)
         constraints.removeAll(keepingCapacity: true)
+        disequalities.removeAll(keepingCapacity: true)
         scopeLimits.removeAll(keepingCapacity: true)
+        disequalityScopeLimits.removeAll(keepingCapacity: true)
         isConflicted = false
         conflictExplanation = []
         conflictScopeLevel = nil
