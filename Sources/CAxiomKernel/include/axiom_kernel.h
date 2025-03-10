@@ -30,6 +30,12 @@ int axiom_vec_is_zero(const uint64_t* data, size_t words);
 // Fast AIG node 64-bit hash combining left child, right child, and operator tag
 uint64_t axiom_aig_hash64(uint32_t left, uint32_t right, uint8_t op);
 
+// Fast 64-bit vector dot product for linear constraint evaluation
+int64_t axiom_vec_dot_i64(const int64_t* a, const int64_t* b, size_t count);
+
+// Fast bit search: find index of first set bit, or -1 if all zero
+int64_t axiom_bitset_find_first_set(const uint64_t* data, size_t words);
+
 #ifdef __cplusplus
 }
 #endif

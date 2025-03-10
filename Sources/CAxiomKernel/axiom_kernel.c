@@ -113,3 +113,38 @@ uint64_t axiom_aig_hash64(uint32_t left, uint32_t right, uint8_t op) {
     k = (k ^ (k >> 27)) * 0x94d049bb133111ebULL;
     return k ^ (k >> 31);
 }
+
+int64_t axiom_vec_dot_i64(const int64_t* a, const int64_t* b, size_t count) {
+    if (!a || !b || count == 0) return 0;
+    int64_t sum = 0;
+    size_t i = 0;
+
+#if defined(__arm64__) || defined(__aarch64__)
+    int64x2_t vsum = vdupq_n_s64(0);
+    for (; i + 2 <= count; i += 2) {
+        int64x2_t va = vld1q_s64(a + i);
+        int64x2_t vb = vld1q_s64(b + i);
+        // Multiply and accumulate 64-bit integers
+        int64_t prod0 = vgetq_lane_s64(va, 0) * vgetq_lane_s64(vb, 0);
+        int64_t prod1 = vgetq_lane_s64(va, 1) * vgetq_lane_s64(vb, 1);
+        vsum = vaddq_s64(vsum, (int64x2_t){prod0, prod1});
+    }
+    sum = vgetq_lane_s64(vsum, 0) + vgetq_lane_s64(vsum, 1);
+#endif
+
+    for (; i < count; i++) {
+        sum += a[i] * b[i];
+    }
+    return sum;
+}
+
+int64_t axiom_bitset_find_first_set(const uint64_t* data, size_t words) {
+    if (!data || words == 0) return -1;
+    for (size_t i = 0; i < words; i++) {
+        if (data[i] != 0) {
+            int ctz = __builtin_ctzll(data[i]);
+            return (int64_t)(i * 64 + (size_t)ctz);
+        }
+    }
+    return -1;
+}
