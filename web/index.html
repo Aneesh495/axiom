@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Axiom Formal Verification Kernel: Interactive Proof DAG Visualizer</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo-mark">∀</div>
+      <div>
+        <h1>Axiom Proof Explorer</h1>
+        <p class="subtitle">Interactive Implication DAG &amp; Resolution Tree Visualizer</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="badge badge-online">Kernel Live</span>
+      <span class="badge badge-version">v1.0.0-verified</span>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <aside class="sidebar">
+      <section class="panel">
+        <h2>Input Script</h2>
+        <div class="form-group">
+          <label for="example-select">Load SMT-LIB Benchmark</label>
+          <select id="example-select">
+            <option value="php">PHP(4, 3) Pigeonhole Principle (UNSAT)</option>
+            <option value="gcd">Euclidean GCD Invariant (Verified)</option>
+            <option value="simplex">2D Simplex Feasible Polytope (SAT)</option>
+            <option value="diophantine">Diophantine GCD Infeasibility (UNSAT)</option>
+            <option value="array">McCarthy ROW2 Read-Over-Write (UNSAT)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="smt-input">SMT-LIB 2.6 / MicroLang AST</label>
+          <textarea id="smt-input" rows="12" spellcheck="false"></textarea>
+        </div>
+        <div class="btn-group">
+          <button id="btn-verify" class="btn btn-primary">Run Verification</button>
+          <button id="btn-reset" class="btn btn-secondary">Reset Canvas</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Kernel Diagnostics</h2>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span class="stat-label">Decision Result</span>
+            <span id="stat-result" class="stat-value val-unsat">UNSAT</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Proof Clauses</span>
+            <span id="stat-clauses" class="stat-value">28</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">DAG Depth</span>
+            <span id="stat-depth" class="stat-value">6</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Kernel Time</span>
+            <span id="stat-time" class="stat-value">0.84 ms</span>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <section class="content-area">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <button id="btn-zoom-in" class="tool-btn" title="Zoom In">+</button>
+          <button id="btn-zoom-out" class="tool-btn" title="Zoom Out">-</button>
+          <button id="btn-zoom-fit" class="tool-btn" title="Fit to Screen">Fit</button>
+          <span class="separator"></span>
+          <label class="switch-label">
+            <input type="checkbox" id="chk-implication" checked>
+            <span>Highlight 1-UIP Conflict Cut</span>
+          </label>
+        </div>
+        <div class="toolbar-right">
+          <span id="node-count-label">Displaying 18 Proof Nodes</span>
+        </div>
+      </div>
+
+      <div class="viewport" id="viewport">
+        <svg id="graph-svg" width="100%" height="100%">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+            </marker>
+            <marker id="arrow-conflict" viewBox="0 0 10 10" refX="22" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
+            </marker>
+          </defs>
+          <g id="graph-container"></g>
+        </svg>
+      </div>
+
+      <div class="inspector-panel" id="inspector-panel">
+        <div class="inspector-header">
+          <h3>Clause Inspector</h3>
+          <button id="btn-close-inspector" class="btn-icon">&times;</button>
+        </div>
+        <div class="inspector-body">
+          <p><strong>Clause ID:</strong> <span id="insp-id">C_14</span></p>
+          <p><strong>Literals:</strong> <code id="insp-lits">(not p11) or (not p21)</code></p>
+          <p><strong>Antecedents:</strong> <span id="insp-ante">C_2, C_5</span></p>
+          <p><strong>Resolution Pivot:</strong> <code id="insp-pivot">p11</code></p>
+          <p><strong>Theory Tag:</strong> <span class="tag tag-sat" id="insp-theory">CDCL Prop</span></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
