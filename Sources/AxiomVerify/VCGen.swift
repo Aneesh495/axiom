@@ -66,25 +66,52 @@ public final class VCGen: @unchecked Sendable {
         var allObligations = obligations
         allObligations.append(topObligation)
 
-        var totalChecked = 0
+        var allGoals: [(assumptions: [Expr], goal: Expr)] = []
         for obligation in allObligations {
+            allGoals.append(contentsOf: decomposeObligation(obligation))
+        }
+
+        var totalChecked = 0
+        for g in allGoals {
             totalChecked += 1
-            solver.push()
+            solver.reset()
 
-            // Refutation check: assert not(obligation)
-            _ = solver.assert(.not(obligation))
+            for a in g.assumptions {
+                _ = solver.assert(a)
+            }
+            _ = solver.assert(.not(g.goal))
+
             let res = solver.check()
-
             if res == .sat {
                 let model = solver.getModel() ?? SMTModel()
-                solver.pop()
-                return .counterexample(model: model, obligation: obligation)
+                return .counterexample(model: model, obligation: Expr.implies(.and(g.assumptions), g.goal))
             }
-
-            solver.pop()
         }
 
         return .verified(obligationsCount: totalChecked)
+    }
+
+    private func decomposeObligation(_ expr: Expr, assumptions: [Expr] = []) -> [(assumptions: [Expr], goal: Expr)] {
+        switch expr {
+        case let .implies(hyp, conc):
+            var newAssumptions = assumptions
+            if case let .and(conjuncts) = hyp {
+                newAssumptions.append(contentsOf: conjuncts)
+            } else {
+                newAssumptions.append(hyp)
+            }
+            return decomposeObligation(conc, assumptions: newAssumptions)
+
+        case let .and(conjuncts):
+            var result: [(assumptions: [Expr], goal: Expr)] = []
+            for c in conjuncts {
+                result.append(contentsOf: decomposeObligation(c, assumptions: assumptions))
+            }
+            return result
+
+        default:
+            return [(assumptions: assumptions, goal: expr)]
+        }
     }
 
     // MARK: - Weakest Precondition Calculus

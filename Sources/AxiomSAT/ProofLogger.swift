@@ -13,14 +13,16 @@ public final class ProofLogger: @unchecked Sendable {
     /// Log addition of an asserting learned clause
     public func logAddClause(_ literals: [Literal]) {
         guard isEnabled else { return }
-        let dimacsLits = literals.map { String($0.toDimacs) }.joined(separator: " ")
+        let valid = literals.filter { $0 != .undefined }
+        let dimacsLits = valid.map { String($0.toDimacs) }.joined(separator: " ")
         proofLines.append("\(dimacsLits) 0")
     }
 
     /// Log deletion of a learned clause
     public func logDeleteClause(_ literals: [Literal]) {
         guard isEnabled else { return }
-        let dimacsLits = literals.map { String($0.toDimacs) }.joined(separator: " ")
+        let valid = literals.filter { $0 != .undefined }
+        let dimacsLits = valid.map { String($0.toDimacs) }.joined(separator: " ")
         proofLines.append("d \(dimacsLits) 0")
     }
 

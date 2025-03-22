@@ -33,6 +33,7 @@ public final class ConflictAnalyzer: @unchecked Sendable {
         vsids: VSIDS
     ) -> ConflictResult {
         let currentLevel = trail.decisionLevel
+        ensureCapacity(forVariable: Int32(trail.assigns.count + 1))
         var learnedLits: [Literal] = [Literal.undefined] // Index 0 reserved for asserting 1-UIP literal
         var backtrackLevel: Int32 = 0
         var pathCount = 0
@@ -70,18 +71,22 @@ public final class ConflictAnalyzer: @unchecked Sendable {
                 let candidate = trail.trail[trailIdx]
                 trailIdx -= 1
                 let vIdx = Int(candidate.variable)
-                if seen[vIdx] {
+                if vIdx < seen.count && seen[vIdx] {
                     p = candidate
                     break
                 }
             }
 
-            seen[Int(p.variable)] = false
+            if p != .undefined && Int(p.variable) < seen.count {
+                seen[Int(p.variable)] = false
+            }
             pathCount -= 1
 
             if pathCount <= 0 {
                 // p is the First Unique Implication Point (1-UIP)!
-                learnedLits[0] = ~p
+                if p != .undefined {
+                    learnedLits[0] = ~p
+                }
                 break
             }
 

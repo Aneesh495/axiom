@@ -130,11 +130,15 @@ public final class SATSolver: @unchecked Sendable {
     }
 
     public func backtrackToRoot() {
-        let unassigned = trail.backtrack(toLevel: 0)
+        backtrack(toLevel: 0)
+    }
+
+    public func backtrack(toLevel level: Int32) {
+        let unassigned = trail.backtrack(toLevel: level)
         for v in unassigned {
             vsids.insertVariable(v)
         }
-        propHead = trail.trail.count
+        propHead = 0
     }
 
     // MARK: - Two-Watched-Literal Boolean Constant Propagation (BCP)

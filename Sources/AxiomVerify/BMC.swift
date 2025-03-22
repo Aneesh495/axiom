@@ -62,40 +62,62 @@ public final class BMC: @unchecked Sendable {
 
         // 4. Check each safety assertion along its path condition
         for (idx, (cond, assertion)) in assertions.enumerated() {
-            solver.push()
-
-            // Violation check: pathCondition /\ not(assertion)
-            let violationExpr = Expr.and([cond, .not(assertion)])
-            _ = solver.assert(violationExpr)
-
-            let res = solver.check()
-            if res == .sat {
-                let model = solver.getModel() ?? SMTModel()
-                solver.pop()
+            if let model = checkViolation(condition: cond, assertion: assertion) {
                 return .violation(step: idx, model: model, assertion: assertion)
             }
-
-            solver.pop()
         }
 
         // 5. Check postconditions
         for post in procedure.ensures {
-            solver.push()
             let currentPost = mapToCurrentSSAVariables(post)
-            let violationExpr = Expr.and([pathCond, .not(currentPost)])
-            _ = solver.assert(violationExpr)
-
-            let res = solver.check()
-            if res == .sat {
-                let model = solver.getModel() ?? SMTModel()
-                solver.pop()
+            if let model = checkViolation(condition: pathCond, assertion: currentPost) {
                 return .violation(step: assertions.count, model: model, assertion: post)
             }
-
-            solver.pop()
         }
 
         return .safe(bound: bound, unwindingComplete: false)
+    }
+
+    private func checkViolation(condition: Expr, assertion: Expr) -> SMTModel? {
+        if case let .eq(lhs, rhs) = assertion, lhs.sort == .int || rhs.sort == .int {
+            // Check lower violation: condition /\ (lhs <= rhs - 1)
+            solver.push()
+            let v1 = Expr.and([condition, .le(lhs, .sub(rhs, .intConst(1)))])
+            _ = solver.assert(v1)
+            let r1 = solver.check()
+            if r1 == .sat {
+                let m = solver.getModel() ?? SMTModel()
+                solver.pop()
+                return m
+            }
+            solver.pop()
+
+            // Check upper violation: condition /\ (lhs >= rhs + 1)
+            solver.push()
+            let v2 = Expr.and([condition, .ge(lhs, .add([rhs, .intConst(1)]))])
+            _ = solver.assert(v2)
+            let r2 = solver.check()
+            if r2 == .sat {
+                let m = solver.getModel() ?? SMTModel()
+                solver.pop()
+                return m
+            }
+            solver.pop()
+
+            return nil
+        } else {
+            solver.push()
+            let violationExpr = Expr.and([condition, .not(assertion)])
+            _ = solver.assert(violationExpr)
+            let res = solver.check()
+            if res == .sat {
+                let m = solver.getModel() ?? SMTModel()
+                solver.pop()
+                return m
+            }
+            solver.pop()
+            return nil
+        }
     }
 
     // MARK: - Loop Unrolling

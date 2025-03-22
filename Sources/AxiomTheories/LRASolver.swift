@@ -525,8 +525,20 @@ public struct FarkasCertificate: Sendable {
                 return assertInequality(lhs: lhs, rhs: rhs, isStrict: false, isGreater: false, originalExpr: originalExpr)
             case let .eq(lhs, rhs):
                 var poly = toPolynomial(expr: lhs) - toPolynomial(expr: rhs)
+                if poly.terms.isEmpty {
+                    if poly.constant.isZero {
+                        return .conflict(explanation: [originalExpr])
+                    }
+                    return .consistent
+                }
                 if let minVar = poly.terms.keys.min(), let leadingCoeff = poly.terms[minVar], leadingCoeff < .zero {
                     poly = poly * Rational(-1)
+                }
+                if poly.terms.count == 1, let (v, coeff) = poly.terms.first {
+                    let targetVal = -poly.constant / coeff
+                    if let lb = lowerBounds[v], let ub = upperBounds[v], lb.value == ub.value, lb.value == targetVal {
+                        return .conflict(explanation: [originalExpr, lb.reason, ub.reason])
+                    }
                 }
                 for bVar in basicVars {
                     if let row = tableau[bVar], row == poly.terms {
@@ -600,7 +612,7 @@ public struct FarkasCertificate: Sendable {
     ) -> TheoryResult {
         // Form: poly <= constant or poly >= constant
         var poly = toPolynomial(expr: lhs) - toPolynomial(expr: rhs)
-        var effectiveStrict = isStrict
+        let effectiveStrict = isStrict
         var effectiveGreater = isGreater
 
         if poly.terms.isEmpty {

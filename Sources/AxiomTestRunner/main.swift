@@ -1326,6 +1326,8 @@ runner.suite("AxiomVerify Program Verification & Model Checking") {
     }
 }
 
+RegressionTestSuite.run(on: runner)
+
 runner.reportAndExit()
 
 
