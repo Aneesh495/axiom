@@ -789,6 +789,26 @@ runner.suite("AxiomTheories QF_LIA Integer Arithmetic & Diophantine Verification
         runner.expectEqual(lia.integerVariableValue(y), BigInt(2))
     }
 
+    runner.test("Strict comparisons between integer expressions preserve a unit gap") {
+        let x = Expr.variable(name: "x", sort: .int)
+        let y = Expr.variable(name: "y", sort: .int)
+        let next = Expr.variable(name: "x_next", sort: .int)
+
+        // The subtraction branch of the GCD fixture preserves positivity.
+        let solver = SMTSolver()
+        solver.assert(.eq(next, .sub(x, y)))
+        solver.assert(.gt(x, y))
+        solver.assert(.or([.le(next, .intConst(0)), .le(y, .intConst(0))]))
+        solver.assert(.gt(y, .intConst(0)))
+        runner.expectEqual(solver.check(), .unsat)
+
+        let lia = LIASolver()
+        let strict = Expr.not(.le(x, y))
+        runner.expectEqual(lia.assertLiteral(strict), .consistent)
+        runner.expectEqual(lia.assertLiteral(.eq(.sub(x, y), .intConst(1))), .consistent)
+        runner.expectEqual(lia.checkConsistency(), .consistent)
+    }
+
     runner.test("Continuous feasible but integer infeasible fractional gap") {
         let lia = LIASolver()
         let x = Expr.variable(name: "x", sort: .int)
